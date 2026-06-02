@@ -13,9 +13,12 @@
 import os
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all
 
+# NOTE: PyInstaller resolves paths in a .spec relative to the spec file's own
+# directory (packaging/), NOT the cwd. build.ps1 runs from the repo root, so we
+# anchor every source path to that root explicitly to avoid "script not found".
 ROOT = os.path.abspath(os.getcwd())
 
-datas = [(os.path.join("cfg", "gamestate_integration_aegis_clipper.cfg"), "cfg")]
+datas = [(os.path.join(ROOT, "cfg", "gamestate_integration_aegis_clipper.cfg"), "cfg")]
 
 # pywebview ships runtime JS (webview/js/*.js) that must be bundled, and on
 # Windows uses pythonnet (clr) for the EdgeChromium backend. Collect both
@@ -27,7 +30,7 @@ except Exception:
 
 # Vendored ffmpeg (optional) — placed next to the exe so resolve_ffmpeg() finds it.
 binaries = []
-vendor = os.path.join("packaging", "vendor")
+vendor = os.path.join(ROOT, "packaging", "vendor")
 for exe in ("ffmpeg.exe", "ffprobe.exe"):
     p = os.path.join(vendor, exe)
     if os.path.exists(p):
@@ -50,7 +53,7 @@ for pkg in ("clr_loader", "pythonnet"):
         pass
 
 a = Analysis(
-    ["clipper.py"],
+    [os.path.join(ROOT, "clipper.py")],
     pathex=[ROOT],
     binaries=binaries,
     datas=datas,
@@ -67,7 +70,7 @@ exe = EXE(
     exclude_binaries=True,
     name="AegisClipper",
     console=False,                      # windowed app; logs go to the tray/dashboard
-    icon=os.path.join("packaging", "aegis.ico") if os.path.exists(
-        os.path.join("packaging", "aegis.ico")) else None,
+    icon=os.path.join(ROOT, "packaging", "aegis.ico") if os.path.exists(
+        os.path.join(ROOT, "packaging", "aegis.ico")) else None,
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="AegisClipper")
