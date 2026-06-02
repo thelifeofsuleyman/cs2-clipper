@@ -45,6 +45,7 @@ class Engine:
         self.catalog = catalog
         self.recorder = make_recorder(cfg)
         self._lock = threading.Lock()
+        self._rec_lock = threading.Lock()   # serializes recorder start/stop/restart
         self._timer: threading.Timer | None = None
         self._state = {
             "last_match_kills": -1,
@@ -94,17 +95,22 @@ class Engine:
 
     # ───────── recorder lifecycle ─────────
     def start_recording(self) -> None:
-        self.recorder.start()
+        with self._rec_lock:
+            self.recorder.start()
 
     def stop_recording(self) -> None:
-        self.recorder.stop()
+        with self._rec_lock:
+            self.recorder.stop()
 
     def restart_recording(self) -> None:
         """Rebuild the recorder (backend/quality may have changed) and restart it.
-        Called after the wizard finishes or recording settings are saved."""
-        self.recorder.stop()
-        self.recorder = make_recorder(self.cfg)
-        self.recorder.start()
+        Called after the wizard finishes or recording settings change. The lock
+        serializes overlapping restarts (e.g. two concurrent config saves) so we
+        never leak a second capture process."""
+        with self._rec_lock:
+            self.recorder.stop()                 # synchronous: old ffmpeg is gone
+            self.recorder = make_recorder(self.cfg)
+            self.recorder.start()
 
     # ───────── status for the dashboard ─────────
     def status(self) -> dict:
@@ -123,14 +129,17 @@ class Engine:
 
     # ───────── clip pipeline ─────────
     def _save_clip(self) -> None:
+        # Snapshot the streak but DON'T zero it yet — only deduct once we know
+        # the outcome, so a transient recorder failure doesn't silently discard a
+        # real streak (and new kills arriving during the save are preserved).
         with self._lock:
             kills = self._state["pending_kills"]
             map_name = self._state["map_name"]
             round_n = self._state["round_n"]
             side = self._state["side"]
-            self._state["pending_kills"] = 0
 
         if kills < int(self.cfg.get("engine.min_kills")):
+            self._consume_pending(kills)         # below threshold: drop intentionally
             return
 
         log(f"Saving clip for {kills} kill(s)")
@@ -138,12 +147,17 @@ class Engine:
         clip_seconds = float(self.cfg.get("recording.clip_seconds", 30))
         clip_path = self.recorder.save(clip_seconds, out)
         if clip_path is None:
-            log("Recorder produced no clip (see log above)")
-            return
+            log("Recorder produced no clip — keeping the streak to retry on the next kill")
+            return                                # keep pending_kills intact
 
+        self._consume_pending(kills)             # success: deduct what we clipped
         clip = self._catalog_clip(clip_path, kills, map_name, round_n, side)
         caption = format_caption(kills, map_name, round_n, side)
         self.fan_out(clip, caption)
+
+    def _consume_pending(self, kills: int) -> None:
+        with self._lock:
+            self._state["pending_kills"] = max(0, self._state["pending_kills"] - kills)
 
     def _catalog_clip(self, path: Path, kills, map_name, round_n, side) -> Clip:
         cid = f"{int(path.stat().st_mtime)}_{uuid.uuid4().hex[:6]}"

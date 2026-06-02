@@ -129,12 +129,16 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
     @app.post("/api/config")
     def api_set_config():
+        import json as _json
         patch = request.get_json(silent=True) or {}
+        before = _json.dumps(cfg.get("recording"), sort_keys=True)
         cfg.update(patch)
         cfg.save()
-        # Apply recording changes live (new backend/quality/encoder) unless the
-        # user is still in the wizard — finish-setup starts it once at the end.
-        if "recording" in patch and not cfg.get("first_run"):
+        after = _json.dumps(cfg.get("recording"), sort_keys=True)
+        # Only restart capture when recording settings actually changed (the
+        # wizard sends the whole config on every save, so don't interrupt an
+        # in-game buffer just because an upload token was edited).
+        if before != after and not cfg.get("first_run"):
             engine.restart_recording()
         return jsonify(ok=True, config=cfg.as_dict())
 

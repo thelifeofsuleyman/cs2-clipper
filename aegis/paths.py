@@ -12,6 +12,19 @@ import os
 from pathlib import Path
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write text without risk of leaving a half-written file.
+
+    config.json and clips.json are rewritten in place on every change; a crash
+    or the updater's os._exit() mid-write could truncate them and lose the whole
+    catalog/config. Write to a temp file in the same dir, then os.replace() —
+    which is atomic on Windows and POSIX — so readers see all-old or all-new.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def data_root() -> Path:
     override = os.getenv("AEGIS_DATA_DIR")
     if override:

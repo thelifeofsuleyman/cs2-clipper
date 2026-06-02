@@ -136,6 +136,9 @@ def _download_and_install(info: UpdateInfo) -> None:
                     done += len(chunk)
                     pct = round(done / total * 100, 1) if total else 0.0
                     _set_progress(downloaded=done, pct=pct)
+        # Guard against a truncated download before we run an installer.
+        if total and done != total:
+            raise IOError(f"incomplete download ({done}/{total} bytes)")
     except Exception as e:
         log(f"Update download failed: {e}")
         _set_progress(state="error", detail=str(e)[:200])

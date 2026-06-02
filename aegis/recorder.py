@@ -28,6 +28,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -172,6 +173,11 @@ class BuiltinRecorder(Recorder):
         self._supervisor: threading.Thread | None = None
         self._stop = threading.Event()
         self._encoder = "?"
+        # Each recorder instance gets its OWN buffer dir. If a config change spins
+        # up a new recorder, its ffmpeg can't collide with a lingering old one's
+        # segment files, and an in-flight save() reads from a stable directory.
+        self._bdir = paths.buffer_dir() / f"rec_{uuid.uuid4().hex[:8]}"
+        self._bdir.mkdir(parents=True, exist_ok=True)
 
     # -- lifecycle --
     def start(self) -> None:
@@ -182,31 +188,51 @@ class BuiltinRecorder(Recorder):
         self._supervisor.start()
 
     def stop(self) -> None:
+        """Synchronous stop: signal, kill ffmpeg, and WAIT for the supervisor to
+        exit. Without the join, restart_recording() could create a new recorder
+        whose ffmpeg writes to the same buffer dir as this one's lingering
+        process — corrupting both. Joining guarantees no overlap."""
         self._stop.set()
         self._kill_proc()
+        sup = self._supervisor
+        if sup and sup.is_alive() and sup is not threading.current_thread():
+            sup.join(timeout=6.0)
+        # ffmpeg is now stopped; drop this instance's buffer dir (best effort).
+        try:
+            shutil.rmtree(self._bdir, ignore_errors=True)
+        except Exception:
+            pass
 
     def _run(self) -> None:
         """Supervisor: keep ffmpeg capturing while enabled (and, if gated, while
-        the game is running); restart it if it dies."""
+        the game is running); restart it if it dies. Never lets an exception kill
+        the thread silently."""
         gate = bool(self.cfg.get("recording.only_when_game_running", True))
         game = self.cfg.get("recording.game_process", "cs2.exe")
         while not self._stop.is_set():
-            want = (not gate) or _process_running(game)
-            running = self._proc is not None and self._proc.poll() is None
-            if want and not running:
-                self._spawn()
-            elif not want and running:
-                self._kill_proc()
+            try:
+                want = (not gate) or _process_running(game)
+                with self._lock:
+                    running = self._proc is not None and self._proc.poll() is None
+                if want and not running:
+                    self._spawn()
+                elif not want and running:
+                    self._kill_proc()
+            except Exception as e:
+                log(f"Built-in recorder supervisor error: {e}")
             self._stop.wait(3.0)
+        self._kill_proc()  # ensure ffmpeg is gone when the loop exits
 
     def _spawn(self) -> None:
+        if self._stop.is_set():        # bail if a stop raced in
+            return
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
             log("Built-in recorder: ffmpeg not found — cannot capture")
             self._stop.wait(10.0)
             return
 
-        bdir = paths.buffer_dir()
+        bdir = self._bdir
         for old in bdir.glob("seg_*.ts"):
             try:
                 old.unlink()
@@ -258,12 +284,14 @@ class BuiltinRecorder(Recorder):
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
             return None
-        if self._proc is None or self._proc.poll() is not None:
+        with self._lock:                       # snapshot to avoid a torn read mid-restart
+            proc = self._proc
+        if proc is None or proc.poll() is not None:
             log("Built-in recorder isn't capturing (game not running?) — no clip")
             return None
 
         seg_time = int(self.cfg.get("recording.segment_time", 2))
-        bdir = paths.buffer_dir()
+        bdir = self._bdir
         # Let the in-progress segment flush so the kill moment is on disk.
         time.sleep(min(seg_time, 2))
         entries = [(p, p.stat().st_mtime) for p in bdir.glob("seg_*.ts") if p.stat().st_size > 0]

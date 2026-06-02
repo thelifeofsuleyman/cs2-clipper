@@ -58,7 +58,7 @@ class Catalog:
 
     def _save_locked(self) -> None:
         data = [asdict(c) for c in self._clips.values()]
-        paths.catalog_file().write_text(json.dumps(data, indent=2), encoding="utf-8")
+        paths.atomic_write_text(paths.catalog_file(), json.dumps(data, indent=2))
 
     def add(self, clip: Clip) -> None:
         with self._lock:

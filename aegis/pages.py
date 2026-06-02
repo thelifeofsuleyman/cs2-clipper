@@ -180,6 +180,7 @@ async function loadClips(){
       </div>
     </div>`).join('');
   bindCards();
+  updateSelBar();   // keep the montage bar in sync after a re-render
 }
 function esc(s){return (s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
 
@@ -251,15 +252,24 @@ async function checkUpdate(){
     $('#upVer').textContent='v'+r.update.version;
     $('#upNotes').textContent=r.update.notes?('— '+r.update.notes.split('\\n')[0].slice(0,80)):'';
     $('#updateBanner').style.display='flex';
-    $('#upBtn').onclick=async()=>{
-      $('#upBtn').disabled=true;$('#upBtn').textContent='Starting…';
-      const res=await api('/api/update/apply',{method:'POST'});
-      if(!res.ok){toast(res.detail||'Update failed');$('#upBtn').textContent='Update now';$('#upBtn').disabled=false;return;}
-      $('#upBar').style.display='block';$('#upDismiss').style.display='none';
-      pollUpdate();
-    };
+    $('#upBtn').onclick=startUpdate;
     $('#upDismiss').onclick=()=>$('#updateBanner').style.display='none';
+    // If a download/install is already running (e.g. you opened Settings and came
+    // back — that's a full page reload), resume the progress UI instead of
+    // showing a fresh "Update now" button over a download that's still going.
+    const p=await api('/api/update/progress');
+    if(p&&(p.state==='downloading'||p.state==='installing')){
+      $('#upBtn').disabled=true;$('#upBar').style.display='block';$('#upDismiss').style.display='none';
+      pollUpdate();
+    }
   }catch(e){}
+}
+async function startUpdate(){
+  $('#upBtn').disabled=true;$('#upBtn').textContent='Starting…';
+  const res=await api('/api/update/apply',{method:'POST'});
+  if(!res.ok){toast(res.detail||'Update failed');$('#upBtn').textContent='Update now';$('#upBtn').disabled=false;return;}
+  $('#upBar').style.display='block';$('#upDismiss').style.display='none';
+  pollUpdate();
 }
 function pollUpdate(){
   const mb=b=>(b/1048576).toFixed(0);
@@ -291,7 +301,12 @@ function pollUpdate(){
 
 loadStatus();loadClips();checkUpdate();
 setInterval(loadStatus,4000);
-setInterval(()=>{if($('section[data-panel=clips]').style.display!=='none')loadClips();},10000);
+setInterval(()=>{
+  if($('section[data-panel=clips]').style.display==='none')return;
+  if(selMode)return;                                   // don't disrupt montage selection
+  if($('#clipGrid').contains(document.activeElement))return; // don't clobber an in-progress title edit
+  loadClips();
+},10000);
 </script></body></html>"""
 
 SETUP_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
@@ -438,8 +453,14 @@ function gather(){return {
     youtube:{enabled:$('#yt_en').checked, client_secrets:$('#yt_secrets').value.trim(), privacy:$('#yt_privacy').value},
   }};}
 
-async function save(){await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify(gather())});}
+async function save(){
+  try{
+    const r=await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(gather())});
+    if(!r.ok){toast('Could not save settings — check the app log');return false;}
+    return true;
+  }catch(e){toast('Could not save settings — is the app still running?');return false;}
+}
 
 async function testClip(){
   $('#testOut').textContent='Generating + sending a test clip…';
@@ -459,7 +480,7 @@ async function installGsi(){
 }
 
 async function finish(){
-  await save();
+  if(!(await save()))return;          // don't mark setup complete if the save failed
   await api('/api/finish-setup',{method:'POST'});
   location.href='/';
 }

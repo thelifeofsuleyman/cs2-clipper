@@ -112,8 +112,8 @@ class Config:
 
     def save(self) -> None:
         with self._lock:
-            paths.config_file().write_text(
-                json.dumps(self._data, indent=2), encoding="utf-8"
+            paths.atomic_write_text(
+                paths.config_file(), json.dumps(self._data, indent=2)
             )
 
 
@@ -193,17 +193,67 @@ def detect_obs_replay_dir() -> Path | None:
     return vids if vids.is_dir() else None
 
 
+def _steam_root() -> Path | None:
+    """Steam's install dir from the registry (works on any drive), else defaults."""
+    try:
+        import winreg
+        for hive, key, val in (
+            (winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath"),
+        ):
+            try:
+                with winreg.OpenKey(hive, key) as k:
+                    p = Path(winreg.QueryValueEx(k, val)[0])
+                    if p.is_dir():
+                        return p
+            except OSError:
+                continue
+    except Exception:
+        pass
+    for p in (Path(r"C:\Program Files (x86)\Steam"), Path(r"C:\Program Files\Steam")):
+        if p.is_dir():
+            return p
+    return None
+
+
+def _steam_library_paths() -> list[Path]:
+    """Every Steam library root, parsed from libraryfolders.vdf — so games on
+    any drive or in a custom folder are found, not just default locations."""
+    import re
+    libs: list[Path] = []
+    root = _steam_root()
+    if root:
+        libs.append(root)
+        vdf = root / "steamapps" / "libraryfolders.vdf"
+        if vdf.is_file():
+            try:
+                text = vdf.read_text(encoding="utf-8", errors="ignore")
+                for m in re.finditer(r'"path"\s*"([^"]+)"', text):
+                    p = Path(m.group(1).replace("\\\\", "\\"))
+                    if p.is_dir() and p not in libs:
+                        libs.append(p)
+            except Exception:
+                pass
+    return libs
+
+
 def detect_cs2_cfg_dir() -> Path | None:
-    """Locate Counter-Strike's csgo\\cfg folder across common Steam library roots."""
+    """Locate Counter-Strike's csgo\\cfg folder. Primary: ask Steam where its
+    libraries are (any drive/custom path). Fallback: probe common locations."""
     rel = Path("steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg")
-    candidates = [
-        Path(r"C:\Program Files (x86)\Steam") / rel,
-        Path(r"C:\Program Files\Steam") / rel,
-    ]
-    for drive in "DEFGH":
-        candidates.append(Path(f"{drive}:\\SteamLibrary") / rel)
-        candidates.append(Path(f"{drive}:\\Steam") / rel)
-    for c in candidates:
+    # 1) Authoritative — every library Steam itself knows about.
+    for lib in _steam_library_paths():
+        c = lib / rel
+        if c.is_dir():
+            return c
+    # 2) Heuristic fallback for odd setups where the vdf wasn't readable.
+    guesses = []
+    for drive in "CDEFGH":
+        guesses.append(Path(f"{drive}:\\Program Files (x86)\\Steam") / rel)
+        guesses.append(Path(f"{drive}:\\SteamLibrary") / rel)
+        guesses.append(Path(f"{drive}:\\Steam") / rel)
+        guesses.append(Path(f"{drive}:\\Games\\SteamLibrary") / rel)
+    for c in guesses:
         if c.is_dir():
             return c
     return None
