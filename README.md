@@ -1,196 +1,177 @@
-# CS2 auto-clipper
+# Aegis Clipper
 
-Auto-saves OBS Replay Buffer clips on every kill streak in CS2 and uploads
-them to a Telegram channel.
+**Automatic CS2 highlight clipper — local-first, like allstar.gg but it all runs
+on your PC.** Detects your kill streaks live, tells OBS to save the moment,
+catalogs every clip in a built-in web dashboard, and (optionally) fans them out
+to Telegram, Discord, or YouTube. Build montages from your best plays with one
+click. No cloud account, no subscription, no screen-scraping — it reads CS2's
+official Game State Integration, so it's anti-cheat safe.
 
-**Mode: debounce-bundle.** Each kill resets a 7-second timer. When the timer
-expires (no kill for 7 sec), one clip covering all kills in the streak is
-saved and uploaded.
+```
+CS2 kill streak ──► OBS Replay Buffer ──► local library + dashboard
+                                          └─► Telegram / Discord / YouTube
+                                          └─► one-click montage
+```
 
-Result: solo kill = one clip. Ace = one clip with all 5 kills, not five
-separate files.
+**Smart bundling:** each kill resets a short timer; when you stop fragging, one
+clip covering the *whole* streak is saved. Solo kill = one clip. Ace = one clip
+with all five kills, not five files.
 
-## Setup — first time only
+---
 
-### 1. Python deps
+## Install (the easy way)
 
-You need Python 3.10+. From this folder:
+1. Download **AegisClipper-Setup.exe** from Releases and run it.
+2. The app starts in your system tray and opens a **setup wizard** in your browser.
+3. The wizard auto-detects OBS and CS2, installs the CS2 integration with one
+   click, and lets you connect Telegram/Discord. Done.
+
+That's it — play CS2 (with OBS's Replay Buffer running) and clips appear in the
+dashboard automatically.
+
+> **You still need [OBS Studio](https://obsproject.com/)** with the Replay Buffer
+> enabled — that's what actually records. The wizard checks this for you. See
+> [OBS setup](#obs-one-time) below.
+
+---
+
+## Run from source (developers)
+
+Needs Python 3.10+.
 
 ```powershell
-# Create venv (one time)
 python -m venv .venv
-
-# Activate it
 .venv\Scripts\Activate.ps1
-
-# Install dependencies
 pip install -r requirements.txt
+
+python -m aegis            # full app: native window + tray (closes to tray)
+python -m aegis --headless # no window/tray (console only) — same engine + dashboard
 ```
 
-### 2. Telegram bot
+The UI is the dashboard / setup wizard, shown in a **native app window** (not a
+browser tab) via WebView2, with a tray icon — closing the window hides it to the
+tray so clipping continues while you play. Under the hood it's still served at
+**http://127.0.0.1:3000** (the GSI listener and dashboard share one port).
+`python clipper.py` still works as a launcher for old habits.
 
-1. Open Telegram → search `@BotFather` → message `/newbot`
-2. Pick a name + username → BotFather sends you a **token** (looks like
-   `123456:ABC-DEF...`). Save it.
-3. Create a private channel (e.g. "CS2 Highlights")
-4. Channel → Settings → Administrators → Add Admin → search your bot →
-   give it post permission
-5. Get the channel's chat ID:
-   - Easy way: add `@userinfobot` to the channel briefly, it'll DM you the
-     ID. Channel IDs are negative numbers starting with `-100`.
-   - Remove `@userinfobot` after.
+---
 
-### 3. OBS setup
+## OBS (one-time)
 
-#### Replay Buffer
-1. OBS → Settings → **Output** tab → Output Mode: **Advanced**
-2. Switch to the **Replay Buffer** tab
-3. Check **Enable Replay Buffer**
-4. Maximum Replay Time: **45** seconds (covers a full multi-kill streak)
-5. Encoder: **NVIDIA NVENC H.264** (uses GPU silicon, ~5% load — leave CPU
-   free for CS2)
-6. Apply, OK.
+**Replay Buffer** — Settings → Output → Output Mode **Advanced** → Replay Buffer
+tab → Enable, Max Replay Time **45s**, Encoder **NVENC** (near-free on GPU).
+Then click **Start Replay Buffer** each session (or auto-start it in
+Settings → General).
 
-#### WebSocket server
-1. OBS → **Tools** menu → **WebSocket Server Settings**
-2. Check **Enable WebSocket server**
-3. Server port: 4455 (default)
-4. Authentication: optional. If you set a password, put it in `.env` as
-   `OBS_PASSWORD`.
-5. Apply.
+**WebSocket** — Tools → WebSocket Server Settings → Enable. Default port 4455. If
+you set a password, enter it in the wizard.
 
-#### Start Replay Buffer
-- In the main OBS window, click **Start Replay Buffer** (bottom right) at
-  the start of every CS2 session.
-- To make it auto-start: OBS → Settings → General → check
-  **Automatically start replay buffer when OBS starts**.
+The setup wizard verifies both of these and reads your recording folder
+automatically.
 
-### 4. CS2 Game State Integration
+---
 
-Copy the GSI config into CS2's cfg folder:
+## Features
+
+| | |
+|---|---|
+| **Auto-capture** | Kill-streak detection via CS2 GSI, debounced into one clip per streak. |
+| **Web dashboard** | Browse, play, rename, tag, favorite, delete, and re-share clips. |
+| **Multiple targets** | Local gallery (always), Telegram, Discord webhook, YouTube. |
+| **Discord auto-fit** | Clips over Discord's 25 MB limit are transparently re-encoded to fit. |
+| **Montage builder** | Select clips → one stitched video, optional music + 9:16 mobile export. |
+| **Setup wizard** | Auto-detects OBS/CS2, installs the GSI config, links upload targets. |
+| **Zero game impact** | Reads Valve's official GSI API — never touches game memory or files. |
+
+### Upload targets at a glance
+
+- **Local gallery** — always on; clips stay on your disk and in the dashboard.
+- **Telegram** — create a bot via `@BotFather`, add it to a channel as admin,
+  paste the token + channel ID. 2 GB file limit, no re-encode needed.
+- **Discord** — paste a channel **webhook URL** (Server → Integrations →
+  Webhooks). 25 MB cap; bigger clips auto-shrink.
+- **YouTube** *(advanced)* — needs a Google Cloud OAuth "Desktop app"
+  credential (`client_secrets.json`); first upload opens a browser to authorize.
+  Install the optional libs: `pip install google-api-python-client google-auth-oauthlib`.
+
+---
+
+## Building the installer
+
+From the repo root, with Python on PATH:
 
 ```powershell
-copy cfg\gamestate_integration_aegis_clipper.cfg "C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg\"
+# App exe only
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1
+
+# Also vendor ffmpeg (enables thumbnails + montage out of the box)
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Ffmpeg
+
+# Also compile the one-click installer (needs Inno Setup 6 installed)
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Ffmpeg -Installer
 ```
 
-CS2 will load the config on next launch. No game restart needed if it was
-already closed; just launch the next time.
+Outputs: `dist\AegisClipper\AegisClipper.exe` and
+`packaging\Output\AegisClipper-Setup.exe`. See [packaging/](packaging/) for the
+PyInstaller spec and Inno Setup script.
 
-### 5. Configure the clipper
+> **ffmpeg** powers thumbnails and montages. Build with `-Ffmpeg` to bundle it,
+> install it on PATH, or just point to it in the wizard. Without it, clipping +
+> uploading still work — only thumbnails/montages are disabled.
 
-```powershell
-copy .env.example .env
-```
+## Releasing & updates
 
-Edit `.env` and fill in:
-- `TG_BOT_TOKEN`        from BotFather
-- `TG_CHAT_ID`          from step 2
-- `OBS_REPLAY_DIR`      verify this matches OBS Settings → Output →
-                        Recording → Recording Path
-- `OBS_PASSWORD`        if you set one
+**Distribution:** ship via **GitHub Releases** — tag a version, attach
+`AegisClipper-Setup.exe`, write notes. (PyPI is only for the `pip install` dev
+path; the installer is the channel for users.)
 
-The other values have safe defaults.
+**Cut a release:**
 
-## Running
+1. Bump `__version__` in [aegis/__init__.py](aegis/__init__.py) — the single
+   source of truth (the installer and update checker read from it).
+2. Set `update.repo` in the config defaults ([aegis/config.py](aegis/config.py))
+   to your `owner/repo` so builds know where to check for updates.
+3. `build.ps1 -Ffmpeg -Installer`, then create a GitHub Release tagged
+   `v<version>` and upload `AegisClipper-Setup.exe`.
 
-```powershell
-.venv\Scripts\Activate.ps1
-python clipper.py
-```
+**Users never redo setup on upgrade.** All settings and clips live in
+`%APPDATA%\AegisClipper\`, the installer upgrades in place (stable `AppId`), and
+config auto-merges new defaults — so the wizard never reappears.
 
-Or use the convenience launcher (no venv activation needed):
+**In-app auto-update:** on launch the app checks your GitHub Releases. If a newer
+version exists, the dashboard shows an **Update now** banner that downloads the
+new installer, runs it silently (Restart Manager closes + relaunches the app),
+and applies the update in place. No manual download, no lost configuration.
 
-```powershell
-.\run.bat
-```
+---
 
-The console will print every kill it detects and every clip it saves. Leave
-it running while you play CS2.
+## Where things live
 
-Verify it's listening:
-```powershell
-curl http://127.0.0.1:3000/health
-```
-Should return `{"ok": true, "obs_connected": true, ...}`.
+App state (settings, clip catalog, thumbnails, montages, logs) is stored under
+`%APPDATA%\AegisClipper\`. Your actual clip video files stay wherever OBS writes
+them. Set `AEGIS_DATA_DIR` to relocate the state folder (handy for dev).
 
-## How it works
-
-```
-CS2 (every ~100ms)
-  ──POST──> Flask :3000  ──> debounce timer (7 sec)
-                              │
-                              ├─ kill resets timer
-                              ├─ kill resets timer
-                              │
-                          (no kill for 7s)
-                              │
-                              ▼
-                          OBS WebSocket:
-                          SaveReplayBuffer
-                              │
-                              ▼
-                      Watch OBS output dir
-                      for new .mp4/.mkv
-                              │
-                              ▼
-                      POST to Telegram API:
-                      sendVideo + caption
-```
-
-Captions auto-generated from kill count:
-
-- `Kill on de_dust2 (round 4, T-side)`
-- `Double tap on de_mirage (round 9, CT-side)`
-- `TRIPLE on de_inferno (round 14, T-side)`
-- `QUAD on de_nuke (round 22, CT-side)`
-- `ACE on de_dust2 (round 15, T-side)`
-
-## Resource impact
-
-On your GTX 1650 + i7-6700 + 16 GB during CS2:
-
-| Component                  | CPU       | GPU            | RAM       |
-| -------------------------- | --------- | -------------- | --------- |
-| OBS Replay Buffer (NVENC)  | ~0%       | ~5% (NVENC)    | ~500 MB   |
-| Flask GSI listener         | <1%       | 0%             | ~50 MB    |
-| Telegram upload (per clip) | 1-2 sec   | 0%             | <50 MB    |
-
-NVENC is a separate silicon block from your gaming cores, so the encode is
-basically free during CS2.
+---
 
 ## Troubleshooting
 
-| Symptom                           | Fix                                                                                          |
-| --------------------------------- | -------------------------------------------------------------------------------------------- |
-| No clips appearing                | Make sure **Start Replay Buffer** was clicked in OBS before joining the match.               |
-| "OBS WebSocket unreachable"       | OBS Tools → WebSocket Server Settings → Enable Server. Restart OBS.                          |
-| "No new clip appeared"            | Check `OBS_REPLAY_DIR` in `.env` matches OBS Settings → Output → Recording → Recording Path. |
-| Clip saves but Telegram errors    | Double-check `TG_BOT_TOKEN` and `TG_CHAT_ID`. Test the bot manually with `curl` first.       |
-| GSI not POSTing                   | Verify the `.cfg` is in CS2's `csgo\cfg\` folder and CS2 was launched after copying.         |
-| Clips include too many rounds     | Lower `DEBOUNCE_SEC` (try 5).                                                                |
-| Solo kills feel like spam         | Set `MIN_KILLS=2` to only clip doubles and above.                                            |
+| Symptom | Fix |
+| --- | --- |
+| No clips appearing | Click **Start Replay Buffer** in OBS before the round. The wizard's status row tells you if it's off. |
+| "OBS WebSocket not reachable" | OBS → Tools → WebSocket Server Settings → Enable. Restart OBS. |
+| "No new clip appeared" | The replay folder in Settings must match OBS's actual recording path. |
+| Discord upload fails on big clips | ffmpeg isn't available to shrink them — bundle/install it, or use Telegram. |
+| No thumbnails / montage greyed out | Install ffmpeg (see above). |
+| GSI not detected | Re-run the wizard's "Install GSI config", then restart CS2. |
+| Too many rounds in one clip | Lower the bundle window (try 5s) in Settings. |
+| Solo kills feel spammy | Set min kills to 2 to only clip doubles and up. |
 
-## Caveats
+---
 
-- **Replay Buffer must be ON** in OBS before the round starts. The script
-  can't enable it for you — it's an OBS-side toggle.
-- **Telegram free limit is 2 GB per file.** A 45-sec NVENC clip at 1080p60
-  is usually 30-80 MB — well within range, no compression needed.
-- **Captions are best-effort.** Round number resets when CS2 thinks a new
-  match started; that detection isn't perfect on warmup matchmaking.
-- The script **does NOT touch CS2's memory or any game files.** GSI is
-  Valve's official API. Anti-cheat safe.
+## How it works (architecture)
 
-## Files in this project
-
-```
-cs2-clipper/
-├── README.md                            ← this file
-├── clipper.py                           ← main script
-├── requirements.txt                     ← pip dependencies
-├── .env.example                         ← config template (copy to .env)
-├── .gitignore                           ← keeps .env out of git
-├── run.bat                              ← convenience launcher
-└── cfg/
-    └── gamestate_integration_aegis_clipper.cfg   ← copy to CS2's cfg folder
-```
+See [CLAUDE.md](CLAUDE.md) for the full module map. In short: a single Flask
+process serves the CS2 GSI endpoint *and* the dashboard on one port; a debounce
+timer turns kill bursts into one clip; the clip is cataloged and fanned out to
+every enabled uploader; ffmpeg handles thumbnails and montages. Everything runs
+locally.

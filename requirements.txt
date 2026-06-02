@@ -1,4 +1,15 @@
+# ── core (required) ──
 flask>=3.0
 requests>=2.31
 obsws-python>=1.7
-python-dotenv>=1.0
+python-dotenv>=1.0          # only used to read a legacy .env during migration
+waitress>=3.0              # production WSGI server for the local dashboard
+
+# ── desktop app (native window + system tray) ──
+pywebview>=5.0           # renders the dashboard in a native window (WebView2 on Windows)
+pystray>=0.19            # tray icon; window closes to tray so clipping continues
+Pillow>=10.0
+
+# ── YouTube upload (optional — only needed if you enable the YouTube target) ──
+# google-api-python-client>=2.0
+# google-auth-oauthlib>=1.0
