@@ -171,6 +171,10 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         log(f"Installed GSI config to {written}")
         return jsonify(ok=True, path=str(written))
 
+    @app.post("/api/test-clip")
+    def api_test_clip():
+        return jsonify(engine.trigger_test_clip())
+
     @app.post("/api/finish-setup")
     def api_finish_setup():
         cfg.set("first_run", False)

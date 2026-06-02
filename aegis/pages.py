@@ -342,6 +342,11 @@ SETUP_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
       <div class=row><label>Privacy</label><select id=yt_privacy><option>unlisted</option><option>private</option><option>public</option></select></div>
       <p class=hint>Create a Google Cloud project, enable “YouTube Data API v3”, make a Desktop OAuth client, and point here at the downloaded file. A browser opens once to authorize.</p>
     </div>
+
+    <div class=foot style="margin-top:16px">
+      <button class=ghost onclick=testClip()>📤 Send a test clip</button>
+      <span class=statusline id=testOut></span>
+    </div>
   </div>
 
   <div class=step>
@@ -403,6 +408,15 @@ function gather(){return {
 
 async function save(){await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify(gather())});}
+
+async function testClip(){
+  $('#testOut').textContent='Generating + sending a test clip…';
+  await save();
+  const r=await api('/api/test-clip',{method:'POST'});
+  if(!r.ok){$('#testOut').innerHTML=`<span class=err>✗ ${r.detail||'failed'}</span>`;return;}
+  const lines=Object.entries(r.results||{}).map(([k,v])=>`${k}: ${v}`).join(' · ');
+  $('#testOut').innerHTML=`<span class=ok>✓ Sent — ${lines}</span>`;
+}
 
 async function installGsi(){
   $('#gsiOut').textContent='Installing…';

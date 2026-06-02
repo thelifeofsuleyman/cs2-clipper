@@ -182,6 +182,20 @@ class Engine:
             log(f"{up.name}: {res.status()}")
         return results
 
+    def trigger_test_clip(self) -> dict:
+        """Generate a synthetic clip and run it through the full pipeline so the
+        user can confirm cataloging + uploads work without playing CS2."""
+        ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
+        if not ffmpeg:
+            return {"ok": False, "detail": "ffmpeg not found — cannot make a test clip"}
+        out = paths.clips_dir() / f"test_{int(time.time())}.mp4"
+        if media.make_test_clip(ffmpeg, out) is None:
+            return {"ok": False, "detail": "test clip generation failed"}
+        clip = self._catalog_clip(out, 1, "test", 0, "?")
+        self.catalog.update(clip.id, title="Test clip", tags=["test"])
+        results = self.fan_out(clip, "Aegis Clipper test clip")
+        return {"ok": True, "clip_id": clip.id, "results": results}
+
     def build_montage(self, clip_ids: list[str]) -> Path | None:
         """Stitch selected clips (newest-first order) into one montage file."""
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))

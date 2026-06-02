@@ -18,7 +18,20 @@ permissions:
   contents: write           # needed to create/update the Release
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: pip install flask requests obsws-python python-dotenv pytest
+      - name: Run pytest
+        run: python -m pytest -q
+
   build-windows:
+    needs: test          # don't build/release if the tests fail
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +55,23 @@ jobs:
 
       - name: Build app, installer, and portable zip
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Ffmpeg -Installer -Portable
+        run: |
+          $ErrorActionPreference = "Continue"
+          # Run the build as a child process so its throws don't kill this step
+          # before we can capture and surface the output.
+          pwsh -ExecutionPolicy Bypass -File packaging\build.ps1 -Ffmpeg -Installer -Portable *>&1 |
+            Tee-Object -FilePath build-output.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Output "::group::Build output (tail)"
+            Get-Content build-output.log -Tail 60
+            Write-Output "::endgroup::"
+            # Surface the last lines as annotations (readable via the API).
+            Get-Content build-output.log -Tail 10 | ForEach-Object {
+              if ($_ -and $_.Trim()) { Write-Output ("::error::" + $_.Trim()) }
+            }
+            exit $code
+          }
 
       - name: Upload build logs on failure
         if: failure()
@@ -50,8 +79,8 @@ jobs:
         with:
           name: build-logs
           path: |
+            build-output.log
             build/**/*.txt
-            build/**/*.toc
           if-no-files-found: ignore
 
       - name: Publish to GitHub Release

@@ -49,6 +49,26 @@ def probe_duration(ffmpeg: str, video: Path) -> float:
         return 0.0
 
 
+def make_test_clip(ffmpeg: str | None, out_path: Path, seconds: int = 5) -> Path | None:
+    """Generate a short synthetic clip (test pattern + tone).
+
+    Lets the wizard verify the full catalog + upload pipeline end-to-end without
+    needing CS2 open or a real capture. Returns the path, or None if ffmpeg is
+    missing or the encode fails.
+    """
+    if not ffmpeg:
+        return None
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    r = _run([
+        ffmpeg, "-y",
+        "-f", "lavfi", "-i", f"testsrc=duration={seconds}:size=1280x720:rate=30",
+        "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
+        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(out_path),
+    ])
+    return out_path if (r.returncode == 0 and out_path.exists()) else None
+
+
 def make_thumbnail(ffmpeg: str | None, video: Path, clip_id: str) -> Path | None:
     """Grab a frame ~2s in as a JPEG. Returns the thumb path or None."""
     if not ffmpeg:
