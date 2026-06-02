@@ -13,10 +13,11 @@
 import os
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all
 
-# NOTE: PyInstaller resolves paths in a .spec relative to the spec file's own
-# directory (packaging/), NOT the cwd. build.ps1 runs from the repo root, so we
-# anchor every source path to that root explicitly to avoid "script not found".
-ROOT = os.path.abspath(os.getcwd())
+# NOTE: PyInstaller runs a .spec with the cwd set to the spec file's own folder,
+# so os.getcwd() is packaging/, NOT the repo root. PyInstaller injects SPECPATH
+# (the spec's directory) as a global; the repo root is its parent. Anchor every
+# source path to that so "clipper.py", "cfg/", and "vendor/" resolve correctly.
+ROOT = os.path.dirname(os.path.abspath(SPECPATH))
 
 datas = [(os.path.join(ROOT, "cfg", "gamestate_integration_aegis_clipper.cfg"), "cfg")]
 
