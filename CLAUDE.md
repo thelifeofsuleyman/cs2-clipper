@@ -6,10 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Aegis Clipper** — a local-first automatic CS2 highlight clipper (an
 allstar.gg-style tool that runs entirely on the user's PC). It detects kill
-streaks via CS2 Game State Integration, has OBS save its replay buffer, catalogs
-each clip, serves a web dashboard, fans clips out to upload targets, and builds
-montages. v2 grew out of a single-file script ([clipper.py](clipper.py), now a
-thin launcher) into the [aegis/](aegis/) package.
+streaks via CS2 Game State Integration, records the moment with its **own
+built-in ffmpeg recorder (no OBS required)**, catalogs each clip, serves a web
+dashboard, fans clips out to upload targets, and builds montages. v2 grew out of
+a single-file script ([clipper.py](clipper.py), now a thin launcher) into the
+[aegis/](aegis/) package. It ships as a self-installing Windows `.exe` built by
+GitHub Actions.
 
 ## Commands
 
@@ -64,7 +66,22 @@ Things that need reading several files to grasp:
   new match and is swallowed; `-1` sentinel = uninitialized so connecting
   mid-match never fires) and the debounce bundling (one `threading.Timer`, reset
   per kill, fires `_save_clip`). All shared state is under `self._lock` because
-  Flask is threaded and the Timer runs on its own thread.
+  Flask is threaded and the Timer runs on its own thread. `_save_clip` delegates
+  to `self.recorder.save(seconds, out_path)` — it doesn't know or care which
+  backend recorded.
+
+- **Recording is a pluggable backend.** [aegis/recorder.py](aegis/recorder.py)
+  defines `Recorder` with two impls chosen by `recording.backend`:
+  `BuiltinRecorder` (default, no OBS) runs ffmpeg continuously capturing the
+  screen via Desktop Duplication (`ddagrab`, sees fullscreen games) into a
+  **rolling buffer of mpegts segments** (segment muxer + `-segment_wrap`); on a
+  kill it stream-copies the newest segments into one clip (cheap, no re-encode).
+  A supervisor thread keeps ffmpeg alive and, when `only_when_game_running`, runs
+  it only while `cs2.exe` is open. `pick_encoder`/`pick_segments`/
+  `build_capture_cmd` are **pure and unit-tested** (no screen/GPU needed).
+  `ObsRecorder` is the optional legacy path (save replay buffer + watch dir).
+  The engine rebuilds the recorder via `make_recorder` on `restart_recording`
+  (after the wizard finishes or recording settings change).
 
 - **Config is the integration seam.** [aegis/config.py](aegis/config.py) is a
   JSON store (`%APPDATA%\AegisClipper\config.json`) with dotted-path get/set,
@@ -100,11 +117,28 @@ Things that need reading several files to grasp:
 
 ## Runtime dependencies (not controlled by the app)
 
-- **OBS** with Replay Buffer *started* (manual toggle) + WebSocket server enabled.
+- **ffmpeg** — now *core*, not optional: the built-in recorder, thumbnails, and
+  montages all use it. Bundled into the build via `build.ps1 -Ffmpeg`; falls back
+  to PATH. Without it, the built-in recorder can't capture.
 - **CS2** launched after the GSI `.cfg` is copied into `csgo\cfg\` (the wizard's
   "Install GSI config" does this and rewrites the `uri` to the configured port).
-- **ffmpeg** for thumbnails/montages (optional; bundle via `build.ps1 -Ffmpeg`).
+- **WebView2 runtime** for the native window (preinstalled on Win11; the
+  installer ships the bootstrapper for Win10).
+- **OBS** — only when `recording.backend == "obs"` (optional advanced mode):
+  Replay Buffer started + WebSocket server enabled.
 - Telegram/Discord/YouTube credentials only if those targets are enabled.
+
+## Build & CI
+
+- **GitHub Actions** ([.github/workflows/release.yml](.github/workflows/release.yml))
+  builds on `windows-latest` on tag push (`v*`): installs CPython, runs
+  `build.ps1 -Ffmpeg -Installer -Portable`, and attaches `AegisClipper-Setup.exe`
+  + `AegisClipper-portable.zip` to the Release. No local toolchain needed.
+- **PyInstaller** ([packaging/aegis.spec](packaging/aegis.spec)) bundles ffmpeg
+  (from `packaging/vendor/`), pywebview's runtime JS, and pythonnet (clr) for the
+  EdgeChromium backend. **Building/running the frozen app needs standard CPython**
+  — the repo's MSYS2 Python has no binary wheels for the GUI libs, so validate
+  GUI/recorder behavior via CI or a python.org install, not the MSYS2 interpreter.
 
 ## Releases & auto-update
 

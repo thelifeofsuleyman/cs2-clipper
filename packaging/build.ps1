@@ -9,7 +9,8 @@
 #   packaging\Output\AegisClipper-Setup.exe    (with -Installer)
 param(
     [switch]$Ffmpeg,
-    [switch]$Installer
+    [switch]$Installer,
+    [switch]$Portable
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -52,8 +53,27 @@ Write-Host "Running PyInstaller..." -ForegroundColor Cyan
 & $py -m PyInstaller --noconfirm --clean packaging\aegis.spec
 Write-Host "App built -> dist\AegisClipper\AegisClipper.exe" -ForegroundColor Green
 
-# 4. Optionally build the installer --------------------------------------
+New-Item -ItemType Directory -Force "packaging\Output" | Out-Null
+
+# 4. Optionally produce a portable zip -----------------------------------
+if ($Portable) {
+    $zip = "packaging\Output\AegisClipper-portable.zip"
+    if (Test-Path $zip) { Remove-Item $zip }
+    Compress-Archive -Path "dist\AegisClipper\*" -DestinationPath $zip
+    Write-Host "Portable zip -> $zip" -ForegroundColor Green
+}
+
+# 5. Optionally build the installer --------------------------------------
 if ($Installer) {
+    # Fetch the WebView2 evergreen bootstrapper so Win10 users without the
+    # runtime get it during install (no-op on Win11 where it's preinstalled).
+    $wv = "packaging\vendor\MicrosoftEdgeWebView2Setup.exe"
+    New-Item -ItemType Directory -Force "packaging\vendor" | Out-Null
+    if (-not (Test-Path $wv)) {
+        Write-Host "Downloading WebView2 bootstrapper..." -ForegroundColor Cyan
+        Invoke-WebRequest "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $wv
+    }
+
     $iscc = @(
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
         "$env:ProgramFiles\Inno Setup 6\ISCC.exe"

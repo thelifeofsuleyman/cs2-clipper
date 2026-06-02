@@ -56,6 +56,8 @@ Name: "startup"; Description: "Start {#AppName} automatically when Windows start
 [Files]
 ; Bundle the entire PyInstaller dist folder.
 Source: "..\dist\AegisClipper\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; WebView2 evergreen bootstrapper — only shipped/run when the runtime is missing.
+Source: "vendor\MicrosoftEdgeWebView2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsWebView2
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -65,4 +67,26 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup
 
 [Run]
+; Ensure the WebView2 runtime (the native window needs it) before first launch.
+Filename: "{tmp}\MicrosoftEdgeWebView2Setup.exe"; Parameters: "/silent /install"; \
+  StatusMsg: "Installing WebView2 runtime..."; Check: NeedsWebView2
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; Flags: nowait postinstall skipifsilent
+
+[Code]
+{ True when the WebView2 evergreen runtime is not installed (machine or per-user). }
+function WebView2Installed: Boolean;
+var
+  v: string;
+begin
+  Result :=
+    RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', v) or
+    RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', v) or
+    RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', v);
+  if Result and (v = '') then
+    Result := False;
+end;
+
+function NeedsWebView2: Boolean;
+begin
+  Result := not WebView2Installed;
+end;

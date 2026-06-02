@@ -11,11 +11,19 @@
 # To bundle ffmpeg, drop ffmpeg.exe (and ffprobe.exe) into packaging/vendor/
 # before building; otherwise the app falls back to ffmpeg on PATH at runtime.
 import os
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all
 
 ROOT = os.path.abspath(os.getcwd())
 
 datas = [(os.path.join("cfg", "gamestate_integration_aegis_clipper.cfg"), "cfg")]
+
+# pywebview ships runtime JS (webview/js/*.js) that must be bundled, and on
+# Windows uses pythonnet (clr) for the EdgeChromium backend. Collect both
+# defensively so a missing optional piece doesn't fail the spec on other OSes.
+try:
+    datas += collect_data_files("webview")
+except Exception:
+    pass
 
 # Vendored ffmpeg (optional) — placed next to the exe so resolve_ffmpeg() finds it.
 binaries = []
@@ -31,6 +39,15 @@ hidden = (
     + collect_submodules("pystray")
     + collect_submodules("webview")
 )
+# pythonnet (clr) backs pywebview's EdgeChromium window on Windows.
+for pkg in ("clr_loader", "pythonnet"):
+    try:
+        b, d, h = collect_all(pkg)
+        binaries += b
+        datas += d
+        hidden += h
+    except Exception:
+        pass
 
 a = Analysis(
     ["clipper.py"],

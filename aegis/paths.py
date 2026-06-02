@@ -46,5 +46,15 @@ def montages_dir() -> Path:
     return _sub("montages")
 
 
+def clips_dir() -> Path:
+    """Where the built-in recorder writes saved clips (OBS backend uses its own)."""
+    return _sub("clips")
+
+
+def buffer_dir() -> Path:
+    """Scratch dir for the rolling replay-buffer segments. Cleared on each start."""
+    return _sub("buffer")
+
+
 def logs_dir() -> Path:
     return _sub("logs")

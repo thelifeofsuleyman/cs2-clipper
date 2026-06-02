@@ -22,7 +22,7 @@ import sys
 import threading
 import webbrowser
 
-from . import APP_NAME, config
+from . import APP_NAME, config, paths
 from .clips import Catalog
 from .engine import Engine
 from .log import log
@@ -41,9 +41,13 @@ def _serve(app, port: int) -> None:
 
 
 def _banner(cfg: config.Config, port: int) -> None:
+    backend = cfg.get("recording.backend", "builtin")
+    rec = (f"OBS ({cfg.get('obs.replay_dir') or 'replay dir NOT SET'})"
+           if backend == "obs"
+           else f"built-in ({cfg.get('recording.preset')}, {cfg.get('recording.clip_seconds')}s clips)")
     log("=" * 60)
     log(f"{APP_NAME} v2  -  dashboard at http://127.0.0.1:{port}")
-    log(f"  replay dir:  {cfg.get('obs.replay_dir') or 'NOT SET'}")
+    log(f"  recording:   {rec}")
     log(f"  debounce:    {cfg.get('engine.debounce_sec')}s  min kills: {cfg.get('engine.min_kills')}")
     targets = [n for n in ('gallery', 'telegram', 'discord', 'youtube')
                if cfg.get(f'uploads.{n}.enabled')]
@@ -57,6 +61,13 @@ def _tray_image():
     img = Image.new("RGB", (64, 64), "#0d1017")
     ImageDraw.Draw(img).ellipse((16, 16, 48, 48), fill="#ff5a3c")
     return img
+
+
+def _clips_folder(cfg) -> str:
+    """Where saved clips land — built-in recorder dir, or OBS's replay dir."""
+    if cfg.get("recording.backend") == "obs" and cfg.get("obs.replay_dir"):
+        return cfg.get("obs.replay_dir")
+    return str(paths.clips_dir())
 
 
 def _open_folder(p) -> None:
@@ -83,7 +94,7 @@ def _run_window(cfg, port: int, landing: str) -> bool:
         APP_NAME, url, width=WINDOW_W, height=WINDOW_H, min_size=(900, 600),
     )
 
-    tray = _start_tray_for_window(window, port)
+    tray = _start_tray_for_window(window, cfg, port)
 
     # Closing the window hides it to the tray instead of quitting, so the engine
     # keeps clipping during a match. If there's no tray, let the close go through.
@@ -106,7 +117,7 @@ def _run_window(cfg, port: int, landing: str) -> bool:
     return True
 
 
-def _start_tray_for_window(window, port: int):
+def _start_tray_for_window(window, cfg, port: int):
     """Detached tray icon that can reopen or quit the window. None if unavailable."""
     try:
         import pystray
@@ -132,7 +143,7 @@ def _start_tray_for_window(window, port: int):
         menu=pystray.Menu(
             pystray.MenuItem("Open Aegis Clipper", _show, default=True),
             pystray.MenuItem("Open clips folder",
-                             lambda i, it: _open_folder(config.detect_obs_replay_dir())),
+                             lambda i, it: _open_folder(_clips_folder(cfg))),
             pystray.MenuItem("Quit", _quit),
         ),
     )
@@ -141,7 +152,7 @@ def _start_tray_for_window(window, port: int):
 
 
 # ───────── UI fallback: tray icon + system browser ─────────
-def _run_tray_browser(port: int) -> None:
+def _run_tray_browser(cfg, port: int) -> None:
     url = f"http://127.0.0.1:{port}/"
     try:
         import pystray
@@ -155,7 +166,7 @@ def _run_tray_browser(port: int) -> None:
         menu=pystray.Menu(
             pystray.MenuItem("Open dashboard", lambda i, it: webbrowser.open(url), default=True),
             pystray.MenuItem("Open clips folder",
-                             lambda i, it: _open_folder(config.detect_obs_replay_dir())),
+                             lambda i, it: _open_folder(_clips_folder(cfg))),
             pystray.MenuItem("Quit", lambda i, it: i.stop()),
         ),
     )
@@ -179,6 +190,12 @@ def main(argv: list[str] | None = None) -> int:
     _banner(cfg, port)
     threading.Thread(target=_serve, args=(app, port), daemon=True).start()
 
+    # Start the recording backend unless the user is still in the setup wizard
+    # (no point capturing until they've chosen quality/backend). The built-in
+    # recorder self-gates on the game running, so this is cheap to leave on.
+    if not cfg.get("first_run"):
+        engine.start_recording()
+
     landing = "/setup" if cfg.get("first_run") else "/"
 
     if headless:
@@ -187,12 +204,14 @@ def main(argv: list[str] | None = None) -> int:
             threading.Event().wait()
         except KeyboardInterrupt:
             pass
+        engine.stop_recording()
         return 0
 
     # Prefer a native window; fall back to tray + browser if pywebview is absent.
     if not _run_window(cfg, port, landing):
         threading.Timer(1.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}{landing}")).start()
-        _run_tray_browser(port)
+        _run_tray_browser(cfg, port)
+    engine.stop_recording()
     return 0
 
 

@@ -132,18 +132,28 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         patch = request.get_json(silent=True) or {}
         cfg.update(patch)
         cfg.save()
+        # Apply recording changes live (new backend/quality/encoder) unless the
+        # user is still in the wizard — finish-setup starts it once at the end.
+        if "recording" in patch and not cfg.get("first_run"):
+            engine.restart_recording()
         return jsonify(ok=True, config=cfg.as_dict())
 
     @app.get("/api/detect")
     def api_detect():
-        obs = config.detect_obs_replay_dir()
+        from . import media, recorder
         cs2 = config.detect_cs2_cfg_dir()
-        from . import media
+        ffmpeg = media.resolve_ffmpeg(cfg.get("ffmpeg_path", ""))
+        encoder, gpu = "", False
+        if ffmpeg:
+            encoder = recorder.pick_encoder(recorder._encoders_text(ffmpeg),
+                                            cfg.get("recording.encoder", "auto"))
+            gpu = encoder != "libx264"
         return jsonify(
-            obs_replay_dir=str(obs) if obs else "",
             cs2_cfg_dir=str(cs2) if cs2 else "",
-            ffmpeg=media.resolve_ffmpeg(cfg.get("ffmpeg_path", "")) or "",
-            obs_connected=engine.obs.connected(),
+            ffmpeg=ffmpeg or "",
+            encoder=encoder,
+            gpu_accel=gpu,
+            obs_replay_dir=str(config.detect_obs_replay_dir() or ""),
         )
 
     @app.post("/api/install-gsi")
@@ -165,6 +175,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     def api_finish_setup():
         cfg.set("first_run", False)
         cfg.save()
+        engine.restart_recording()  # begin capturing now that setup is done
         return jsonify(ok=True)
 
     # ───────── auto-update ─────────

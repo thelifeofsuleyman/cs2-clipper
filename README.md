@@ -1,17 +1,24 @@
 # Aegis Clipper
 
 **Automatic CS2 highlight clipper — local-first, like allstar.gg but it all runs
-on your PC.** Detects your kill streaks live, tells OBS to save the moment,
-catalogs every clip in a built-in web dashboard, and (optionally) fans them out
-to Telegram, Discord, or YouTube. Build montages from your best plays with one
-click. No cloud account, no subscription, no screen-scraping — it reads CS2's
-official Game State Integration, so it's anti-cheat safe.
+on your PC.** Detects your kill streaks live, records the moment with its own
+**built-in lightweight recorder (no OBS needed)**, catalogs every clip in a
+built-in web dashboard, and (optionally) fans them out to Telegram, Discord, or
+YouTube. Build montages from your best plays with one click. No cloud account, no
+subscription — kill detection reads CS2's official Game State Integration, so
+it's anti-cheat safe.
 
 ```
-CS2 kill streak ──► OBS Replay Buffer ──► local library + dashboard
-                                          └─► Telegram / Discord / YouTube
-                                          └─► one-click montage
+CS2 kill streak ──► built-in recorder (rolling buffer) ──► local library + dashboard
+   (GSI)            GPU encode if available, else light SW    └─► Telegram / Discord / YouTube
+                                                              └─► one-click montage
 ```
+
+**No OBS required.** Aegis keeps a short rolling replay buffer with bundled
+ffmpeg, using your GPU encoder (NVENC/AMF/QSV) when present — near-zero cost
+while you play — and a low-CPU software fallback on weak machines. It records
+only while CS2 is open, so it's light. (Prefer OBS for max quality? It's still
+supported as an optional backend.)
 
 **Smart bundling:** each kill resets a short timer; when you stop fragging, one
 clip covering the *whole* streak is saved. Solo kill = one clip. Ace = one clip
@@ -22,16 +29,14 @@ with all five kills, not five files.
 ## Install (the easy way)
 
 1. Download **AegisClipper-Setup.exe** from Releases and run it.
-2. The app starts in your system tray and opens a **setup wizard** in your browser.
-3. The wizard auto-detects OBS and CS2, installs the CS2 integration with one
-   click, and lets you connect Telegram/Discord. Done.
+2. The app opens as a desktop window with a quick **setup wizard**.
+3. The wizard does a system check (recorder + GPU + CS2), installs the CS2
+   integration with one click, lets you pick a quality preset, and connect
+   Telegram/Discord. Done.
 
-That's it — play CS2 (with OBS's Replay Buffer running) and clips appear in the
-dashboard automatically.
-
-> **You still need [OBS Studio](https://obsproject.com/)** with the Replay Buffer
-> enabled — that's what actually records. The wizard checks this for you. See
-> [OBS setup](#obs-one-time) below.
+That's it — play CS2 and your highlights appear in the dashboard automatically.
+**No OBS, no extra downloads** — the installer bundles everything (recorder,
+WebView2 runtime, ffmpeg).
 
 ---
 
@@ -56,18 +61,27 @@ tray so clipping continues while you play. Under the hood it's still served at
 
 ---
 
-## OBS (one-time)
+## Recording quality
 
-**Replay Buffer** — Settings → Output → Output Mode **Advanced** → Replay Buffer
-tab → Enable, Max Replay Time **45s**, Encoder **NVENC** (near-free on GPU).
-Then click **Start Replay Buffer** each session (or auto-start it in
-Settings → General).
+Pick a preset in the wizard:
 
-**WebSocket** — Tools → WebSocket Server Settings → Enable. Default port 4455. If
-you set a password, enter it in the wizard.
+| Preset | Resolution / FPS | Best for |
+|---|---|---|
+| **Low-end** | 720p / 30 | weak CPUs/GPUs, integrated graphics |
+| **Balanced** | 900p / 30 | most machines (default) |
+| **High** | 1080p / 60 | gaming rigs |
+| **Native** | source / 60 | best quality, strongest PCs |
 
-The setup wizard verifies both of these and reads your recording folder
-automatically.
+If a hardware encoder (NVENC/AMF/QSV) is present, encoding is offloaded to the
+GPU for near-zero CPU cost. Otherwise a fast software encoder is used. Aegis only
+records while CS2 is running, so it costs nothing when you're not playing.
+
+### Using OBS instead (optional)
+
+Prefer OBS's capture quality? In the wizard, expand **"Prefer OBS?"** and enable
+it. Then in OBS: enable the **Replay Buffer** (Settings → Output → Advanced) and
+the **WebSocket server** (Tools → WebSocket Server Settings, port 4455). Aegis
+will trigger OBS to save instead of using its own recorder.
 
 ---
 
@@ -75,12 +89,13 @@ automatically.
 
 | | |
 |---|---|
+| **Built-in recorder** | Own rolling replay buffer via ffmpeg — no OBS. GPU encode when available, light SW fallback. |
 | **Auto-capture** | Kill-streak detection via CS2 GSI, debounced into one clip per streak. |
 | **Web dashboard** | Browse, play, rename, tag, favorite, delete, and re-share clips. |
 | **Multiple targets** | Local gallery (always), Telegram, Discord webhook, YouTube. |
 | **Discord auto-fit** | Clips over Discord's 25 MB limit are transparently re-encoded to fit. |
 | **Montage builder** | Select clips → one stitched video, optional music + 9:16 mobile export. |
-| **Setup wizard** | Auto-detects OBS/CS2, installs the GSI config, links upload targets. |
+| **Setup wizard** | System check, one-click CS2 integration, quality presets, link upload targets. |
 | **Zero game impact** | Reads Valve's official GSI API — never touches game memory or files. |
 
 ### Upload targets at a glance
@@ -96,43 +111,46 @@ automatically.
 
 ---
 
-## Building the installer
+## Building & releasing
 
-From the repo root, with Python on PATH:
+### The easy way — GitHub Actions (no local Python)
 
-```powershell
-# App exe only
-powershell -ExecutionPolicy Bypass -File packaging\build.ps1
+Pushing a version tag builds everything on GitHub's Windows runners and publishes
+it to your repo's Releases automatically:
 
-# Also vendor ffmpeg (enables thumbnails + montage out of the box)
-powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Ffmpeg
-
-# Also compile the one-click installer (needs Inno Setup 6 installed)
-powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Ffmpeg -Installer
+```bash
+git tag v2.1.0
+git push origin v2.1.0
 ```
 
-Outputs: `dist\AegisClipper\AegisClipper.exe` and
-`packaging\Output\AegisClipper-Setup.exe`. See [packaging/](packaging/) for the
-PyInstaller spec and Inno Setup script.
+The [release workflow](.github/workflows/release.yml) installs Python, bundles
+ffmpeg, builds the app, compiles the installer, and attaches
+**`AegisClipper-Setup.exe`** + **`AegisClipper-portable.zip`** to the Release. You
+never need a build toolchain locally. (You can also trigger it from the Actions
+tab via "Run workflow".)
 
-> **ffmpeg** powers thumbnails and montages. Build with `-Ffmpeg` to bundle it,
-> install it on PATH, or just point to it in the wizard. Without it, clipping +
-> uploading still work — only thumbnails/montages are disabled.
+### Building locally (optional)
 
-## Releasing & updates
+From the repo root, with standard CPython on PATH:
 
-**Distribution:** ship via **GitHub Releases** — tag a version, attach
-`AegisClipper-Setup.exe`, write notes. (PyPI is only for the `pip install` dev
-path; the installer is the channel for users.)
+```powershell
+# App + bundled ffmpeg + installer + portable zip
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Ffmpeg -Installer -Portable
+```
 
-**Cut a release:**
+Outputs: `dist\AegisClipper\AegisClipper.exe`, `packaging\Output\AegisClipper-Setup.exe`,
+and `packaging\Output\AegisClipper-portable.zip`. See [packaging/](packaging/).
+
+### Cut a release
 
 1. Bump `__version__` in [aegis/__init__.py](aegis/__init__.py) — the single
-   source of truth (the installer and update checker read from it).
+   source of truth (installer version + update checker read from it).
 2. Set `update.repo` in the config defaults ([aegis/config.py](aegis/config.py))
-   to your `owner/repo` so builds know where to check for updates.
-3. `build.ps1 -Ffmpeg -Installer`, then create a GitHub Release tagged
-   `v<version>` and upload `AegisClipper-Setup.exe`.
+   to your `owner/repo`.
+3. Push a `v<version>` tag — GitHub Actions builds and publishes the Release.
+
+**Distribute the installer to users; the portable zip is a fallback.** PyPI is
+only for the `pip install` dev path.
 
 **Users never redo setup on upgrade.** All settings and clips live in
 `%APPDATA%\AegisClipper\`, the installer upgrades in place (stable `AppId`), and

@@ -142,9 +142,10 @@ $$('.tabs button[data-tab]').forEach(b=>b.onclick=()=>{
 async function loadStatus(){
   const s=await api('/api/status');
   const led=(on)=>`<span class="led ${on?'on':'off'}"></span>`;
+  const rec=s.recorder||{};
+  const encTxt=rec.encoder&&rec.encoder!=='?'?` · ${rec.encoder}`:'';
   $('#pills').innerHTML=
-    `<span class=pill>${led(s.obs_connected)} OBS</span>`+
-    `<span class=pill>${led(s.replay_buffer_active)} Replay buffer</span>`+
+    `<span class=pill>${led(s.capturing)} ${s.capturing?'Recording':'Idle'}${encTxt}</span>`+
     `<span class=pill>Pending kills <b>${s.pending_kills}</b></span>`+
     `<span class=pill>Targets <b>${(s.enabled_targets||[]).join(', ')||'none'}</b></span>`;
 }
@@ -282,18 +283,33 @@ SETUP_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <main><div class=wizard>
 
   <div class=step>
-    <h3><span class=num>1</span> Auto-detect</h3>
-    <p class=hint>We look for OBS's recording folder and your CS2 config folder automatically.</p>
-    <div class=statusline id=detectOut>Detecting…</div>
+    <h3><span class=num>1</span> System check</h3>
+    <p class=hint>Aegis records and clips right on your PC — no OBS needed. We check the essentials automatically.</p>
+    <div class=statusline id=detectOut>Checking…</div>
     <div class=foot><button class=ghost onclick=detect()>Re-scan</button></div>
   </div>
 
   <div class=step>
-    <h3><span class=num>2</span> OBS</h3>
-    <p class=hint>Where OBS writes Replay Buffer files, and how to reach its WebSocket (Tools → WebSocket Server Settings).</p>
-    <div class=row><label>Replay folder</label><input id=obs_replay_dir placeholder="C:\\Users\\you\\Videos"></div>
-    <div class=row><label>WebSocket port</label><input id=obs_port value=4455></div>
-    <div class=row><label>Password</label><input id=obs_password type=password placeholder="(blank if none)"></div>
+    <h3><span class=num>2</span> Recording</h3>
+    <p class=hint>Pick the quality that fits your PC. Aegis keeps a short rolling buffer and saves the moment automatically when you frag.</p>
+    <div class=row><label>Quality</label><select id=rec_preset>
+      <option value=low>Low-end — 720p, 30fps (lightest)</option>
+      <option value=medium selected>Balanced — 900p, 30fps</option>
+      <option value=high>High — 1080p, 60fps</option>
+      <option value=source>Native resolution — 60fps</option>
+    </select></div>
+    <div class=row><label>Clip length</label><input id=rec_clip value=30> <span class=hint style=margin:0>seconds saved per kill streak</span></div>
+    <div class=row><label>Record only in-game</label><input type=checkbox id=rec_gate checked style="width:auto"> <span class=hint style=margin:0>only capture while CS2 is open (saves resources)</span></div>
+    <div class=statusline id=encOut></div>
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;color:var(--muted)">Prefer OBS? Use it instead (advanced)</summary>
+      <div class=collapse style=margin-top:10px>
+        <div class=toggle><input type=checkbox id=use_obs> Record with OBS instead of the built-in recorder</div>
+        <div class=row><label>Replay folder</label><input id=obs_replay_dir placeholder="C:\\Users\\you\\Videos"></div>
+        <div class=row><label>WebSocket port</label><input id=obs_port value=4455></div>
+        <div class=row><label>Password</label><input id=obs_password type=password placeholder="(blank if none)"></div>
+      </div>
+    </details>
   </div>
 
   <div class=step>
@@ -347,19 +363,23 @@ function api(u,o){return fetch(u,o).then(r=>r.json());}
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
 
 async function detect(){
-  $('#detectOut').textContent='Detecting…';
+  $('#detectOut').textContent='Checking…';
   const d=await api('/api/detect');
-  if(d.obs_replay_dir&&!$('#obs_replay_dir').value)$('#obs_replay_dir').value=d.obs_replay_dir;
   if(d.cs2_cfg_dir&&!$('#cs2_cfg_dir').value)$('#cs2_cfg_dir').value=d.cs2_cfg_dir;
+  if(d.obs_replay_dir&&!$('#obs_replay_dir').value)$('#obs_replay_dir').value=d.obs_replay_dir;
   $('#detectOut').innerHTML=
-    `<div class="${d.obs_replay_dir?'ok':'err'}">${d.obs_replay_dir?'✓ OBS folder: '+d.obs_replay_dir:'✗ OBS folder not found — set it below'}</div>`+
-    `<div class="${d.cs2_cfg_dir?'ok':'err'}">${d.cs2_cfg_dir?'✓ CS2 cfg: '+d.cs2_cfg_dir:'✗ CS2 cfg folder not found — set it below'}</div>`+
-    `<div class="${d.obs_connected?'ok':'err'}">${d.obs_connected?'✓ OBS WebSocket reachable':'✗ OBS WebSocket not reachable (enable it in OBS → Tools)'}</div>`+
-    `<div class="${d.ffmpeg?'ok':'err'}">${d.ffmpeg?'✓ ffmpeg found (thumbnails + montage enabled)':'✗ ffmpeg not found — montages/thumbnails disabled until installed'}</div>`;
+    `<div class="${d.ffmpeg?'ok':'err'}">${d.ffmpeg?'✓ Recorder ready':'✗ ffmpeg missing — recording/montages disabled'}</div>`+
+    `<div class="${d.gpu_accel?'ok':''}">${d.gpu_accel?'✓ GPU encoding available ('+d.encoder+') — near-zero CPU cost while you play':'• Software encoding (no GPU encoder found) — works fine, uses a little more CPU'}</div>`+
+    `<div class="${d.cs2_cfg_dir?'ok':'err'}">${d.cs2_cfg_dir?'✓ CS2 found':'✗ CS2 cfg folder not found — set it in step 3'}</div>`;
+  $('#encOut').innerHTML=d.encoder?`<span class="${d.gpu_accel?'ok':''}">Encoder: ${d.encoder} ${d.gpu_accel?'(GPU)':'(software)'}</span>`:'';
 }
 
 async function loadExisting(){
   const c=await api('/api/config');
+  const r=c.recording||{};
+  $('#rec_preset').value=r.preset||'medium'; $('#rec_clip').value=r.clip_seconds||30;
+  $('#rec_gate').checked=r.only_when_game_running!==false;
+  $('#use_obs').checked=(r.backend==='obs');
   $('#obs_replay_dir').value=c.obs.replay_dir||'';
   $('#obs_port').value=c.obs.port; $('#obs_password').value=c.obs.password||'';
   $('#debounce').value=c.engine.debounce_sec; $('#minkills').value=c.engine.min_kills;
@@ -371,6 +391,8 @@ async function loadExisting(){
 
 function gather(){return {
   engine:{debounce_sec:parseFloat($('#debounce').value)||7, min_kills:parseInt($('#minkills').value)||1},
+  recording:{backend:$('#use_obs').checked?'obs':'builtin', preset:$('#rec_preset').value,
+       clip_seconds:parseInt($('#rec_clip').value)||30, only_when_game_running:$('#rec_gate').checked},
   obs:{replay_dir:$('#obs_replay_dir').value.trim(), port:parseInt($('#obs_port').value)||4455,
        password:$('#obs_password').value},
   uploads:{

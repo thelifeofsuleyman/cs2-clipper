@@ -22,11 +22,11 @@ import time
 import uuid
 from pathlib import Path
 
-from . import media, uploaders
+from . import media, paths, uploaders
 from .clips import Catalog, Clip
 from .config import Config
 from .log import log
-from .obs_client import ObsClient
+from .recorder import make_recorder
 
 KILL_LABELS = {1: "Kill", 2: "Double tap", 3: "TRIPLE", 4: "QUAD", 5: "ACE"}
 
@@ -43,9 +43,7 @@ class Engine:
     def __init__(self, cfg: Config, catalog: Catalog):
         self.cfg = cfg
         self.catalog = catalog
-        self.obs = ObsClient(
-            cfg.get("obs.host"), int(cfg.get("obs.port")), cfg.get("obs.password", "")
-        )
+        self.recorder = make_recorder(cfg)
         self._lock = threading.Lock()
         self._timer: threading.Timer | None = None
         self._state = {
@@ -94,13 +92,28 @@ class Engine:
         self._timer = t
         t.start()
 
+    # ───────── recorder lifecycle ─────────
+    def start_recording(self) -> None:
+        self.recorder.start()
+
+    def stop_recording(self) -> None:
+        self.recorder.stop()
+
+    def restart_recording(self) -> None:
+        """Rebuild the recorder (backend/quality may have changed) and restart it.
+        Called after the wizard finishes or recording settings are saved."""
+        self.recorder.stop()
+        self.recorder = make_recorder(self.cfg)
+        self.recorder.start()
+
     # ───────── status for the dashboard ─────────
     def status(self) -> dict:
         with self._lock:
             pending = self._state["pending_kills"]
+        rec = self.recorder.status()
         return {
-            "obs_connected": self.obs.connected(),
-            "replay_buffer_active": self.obs.replay_buffer_active(),
+            "recorder": rec,
+            "capturing": rec.get("capturing", False),
             "pending_kills": pending,
             "enabled_targets": [
                 name for name, _ in uploaders.REGISTRY
@@ -120,52 +133,17 @@ class Engine:
         if kills < int(self.cfg.get("engine.min_kills")):
             return
 
-        log(f"Saving replay for {kills} kill(s)")
-        if not self.obs.save_replay_buffer():
-            log("OBS not reachable / save rejected — clip not saved")
-            return
-
-        clip_path = self._wait_for_new_clip(float(self.cfg.get("engine.clip_wait_sec")))
+        log(f"Saving clip for {kills} kill(s)")
+        out = paths.clips_dir() / f"clip_{int(time.time())}_{uuid.uuid4().hex[:6]}.mp4"
+        clip_seconds = float(self.cfg.get("recording.clip_seconds", 30))
+        clip_path = self.recorder.save(clip_seconds, out)
         if clip_path is None:
-            log("No new clip appeared — is the Replay Buffer running in OBS?")
+            log("Recorder produced no clip (see log above)")
             return
 
         clip = self._catalog_clip(clip_path, kills, map_name, round_n, side)
         caption = format_caption(kills, map_name, round_n, side)
         self.fan_out(clip, caption)
-
-    def _wait_for_new_clip(self, timeout: float) -> Path | None:
-        replay_dir = Path(self.cfg.get("obs.replay_dir") or (Path.home() / "Videos"))
-        start = time.time()
-        deadline = start + timeout
-        while time.time() < deadline:
-            time.sleep(0.5)
-            try:
-                candidates = [
-                    f for f in replay_dir.iterdir()
-                    if f.is_file()
-                    and f.suffix.lower() in (".mp4", ".mkv", ".mov")
-                    and f.stat().st_mtime >= start - 1
-                ]
-            except FileNotFoundError:
-                log(f"OBS replay dir not found: {replay_dir}")
-                return None
-            if candidates:
-                latest = max(candidates, key=lambda f: f.stat().st_mtime)
-                return self._await_complete(latest)
-        return None
-
-    @staticmethod
-    def _await_complete(f: Path) -> Path:
-        """Wait until the file size stops growing (OBS finished writing)."""
-        prev = -1
-        for _ in range(12):
-            size = f.stat().st_size
-            if size > 0 and size == prev:
-                return f
-            prev = size
-            time.sleep(0.3)
-        return f
 
     def _catalog_clip(self, path: Path, kills, map_name, round_n, side) -> Clip:
         cid = f"{int(path.stat().st_mtime)}_{uuid.uuid4().hex[:6]}"
@@ -206,7 +184,6 @@ class Engine:
 
     def build_montage(self, clip_ids: list[str]) -> Path | None:
         """Stitch selected clips (newest-first order) into one montage file."""
-        from . import paths
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         clips = [self.catalog.get(cid) for cid in clip_ids]
         paths_in = [Path(c.path) for c in clips if c and c.exists()]

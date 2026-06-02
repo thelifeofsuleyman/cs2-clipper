@@ -7,6 +7,7 @@ waitress>=3.0              # production WSGI server for the local dashboard
 
 # ── desktop app (native window + system tray) ──
 pywebview>=5.0           # renders the dashboard in a native window (WebView2 on Windows)
+pythonnet>=3.0; sys_platform == "win32"   # pywebview's EdgeChromium backend on Windows
 pystray>=0.19            # tray icon; window closes to tray so clipping continues
 Pillow>=10.0
 

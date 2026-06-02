@@ -32,7 +32,19 @@ DEFAULTS: dict[str, Any] = {
         "clip_wait_sec": 8.0,    # how long to wait for OBS to finish writing
         "gsi_port": 3000,        # CS2 GSI POST target (matches the .cfg)
     },
-    "obs": {
+    "recording": {
+        "backend": "builtin",          # "builtin" (no OBS) | "obs"
+        "preset": "medium",            # low | medium | high | source  (see recorder.PRESETS)
+        "fps": 0,                      # 0 = use the preset's fps
+        "encoder": "auto",             # auto | nvenc | amf | qsv | x264
+        "capture": "ddagrab",          # ddagrab (fullscreen-safe) | gdigrab
+        "buffer_seconds": 45,          # rolling buffer length kept on disk
+        "clip_seconds": 30,            # how much to save per kill streak
+        "segment_time": 2,             # rolling-buffer segment granularity
+        "only_when_game_running": True,  # record only while the game is open (light)
+        "game_process": "cs2.exe",
+    },
+    "obs": {                            # used only when recording.backend == "obs"
         "host": "localhost",
         "port": 4455,
         "password": "",
