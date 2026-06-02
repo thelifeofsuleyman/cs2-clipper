@@ -22,35 +22,48 @@ $AppVersion = $verLine.Matches[0].Groups[1].Value
 Write-Host "Building Aegis Clipper v$AppVersion" -ForegroundColor Cyan
 
 # 1. Build environment ----------------------------------------------------
-if (-not (Test-Path ".venv\Scripts\python.exe")) {
-    Write-Host "Creating build venv..." -ForegroundColor Cyan
+# Prefer an existing .venv; otherwise use the python already on PATH (CI sets one
+# up with deps installed). Avoids a slow, redundant second install on CI.
+if (Test-Path ".venv\Scripts\python.exe") {
+    $py = ".\.venv\Scripts\python.exe"
+} elseif (Get-Command python -ErrorAction SilentlyContinue) {
+    $py = "python"
+} else {
     python -m venv .venv
+    $py = ".\.venv\Scripts\python.exe"
 }
-$py = ".\.venv\Scripts\python.exe"
+Write-Host "Using interpreter: $py" -ForegroundColor Cyan
 Write-Host "Installing dependencies + PyInstaller..." -ForegroundColor Cyan
-& $py -m pip install --quiet --upgrade pip
-& $py -m pip install --quiet -r requirements.txt pyinstaller
+& $py -m pip install --upgrade pip
+& $py -m pip install -r requirements.txt pyinstaller
+if ($LASTEXITCODE -ne 0) { throw "dependency install failed" }
 
 # 2. Optionally vendor ffmpeg --------------------------------------------
 if ($Ffmpeg) {
     $vendor = "packaging\vendor"
     New-Item -ItemType Directory -Force $vendor | Out-Null
     if (-not (Test-Path "$vendor\ffmpeg.exe")) {
-        Write-Host "Downloading ffmpeg (gyan.dev essentials build)..." -ForegroundColor Cyan
+        # BtbN's GitHub release builds are CI-friendly (gyan.dev rate-limits runners).
+        $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        Write-Host "Downloading ffmpeg (BtbN win64-gpl)..." -ForegroundColor Cyan
         $zip = "$env:TEMP\ffmpeg.zip"
-        Invoke-WebRequest "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $zip
+        Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
         Expand-Archive $zip "$env:TEMP\ffmpeg" -Force
         $bin = Get-ChildItem "$env:TEMP\ffmpeg" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+        if (-not $bin) { throw "ffmpeg.exe not found in download" }
         Copy-Item $bin.FullName "$vendor\ffmpeg.exe"
         Copy-Item (Join-Path $bin.DirectoryName "ffprobe.exe") "$vendor\ffprobe.exe"
         Remove-Item $zip, "$env:TEMP\ffmpeg" -Recurse -Force
     }
+    if (-not (Test-Path "$vendor\ffmpeg.exe")) { throw "ffmpeg vendoring failed" }
     Write-Host "ffmpeg vendored." -ForegroundColor Green
 }
 
 # 3. PyInstaller ----------------------------------------------------------
 Write-Host "Running PyInstaller..." -ForegroundColor Cyan
 & $py -m PyInstaller --noconfirm --clean packaging\aegis.spec
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE)" }
+if (-not (Test-Path "dist\AegisClipper\AegisClipper.exe")) { throw "PyInstaller produced no exe" }
 Write-Host "App built -> dist\AegisClipper\AegisClipper.exe" -ForegroundColor Green
 
 New-Item -ItemType Directory -Force "packaging\Output" | Out-Null

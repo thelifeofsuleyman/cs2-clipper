@@ -1,5 +1,11 @@
 # Aegis Clipper
 
+[![Build](https://github.com/thelifeofsuleyman/cs2-clipper/actions/workflows/release.yml/badge.svg)](https://github.com/thelifeofsuleyman/cs2-clipper/actions/workflows/release.yml)
+[![Release](https://img.shields.io/github/v/release/thelifeofsuleyman/cs2-clipper?display_name=tag)](https://github.com/thelifeofsuleyman/cs2-clipper/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/thelifeofsuleyman/cs2-clipper/total)](https://github.com/thelifeofsuleyman/cs2-clipper/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
+
 **Automatic CS2 highlight clipper — local-first, like allstar.gg but it all runs
 on your PC.** Detects your kill streaks live, records the moment with its own
 **built-in lightweight recorder (no OBS needed)**, catalogs every clip in a
