@@ -11,18 +11,22 @@ _BASE_CSS = """
   --ok:#37d67a; --warn:#ffb020; --err:#ff5470;
 }
 *{box-sizing:border-box}
-body{margin:0;font:14px/1.5 'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--txt)}
+body{margin:0;font:14px/1.55 'Segoe UI',system-ui,sans-serif;color:var(--txt);
+  background:radial-gradient(1100px 560px at 50% -12%, #151c29 0%, var(--bg) 62%) fixed}
 a{color:var(--accent2);text-decoration:none}
-button{font:inherit;cursor:pointer;border:none;border-radius:8px;padding:8px 14px;
+button{font:inherit;cursor:pointer;border:none;border-radius:9px;padding:8px 14px;
   background:var(--panel2);color:var(--txt);transition:.15s}
 button:hover{background:#2a323f}
-button.primary{background:var(--accent);color:#fff;font-weight:600}
-button.primary:hover{filter:brightness(1.1)}
+button.primary{background:linear-gradient(135deg,#ff6a3c,#ff4d6d);color:#fff;font-weight:600;
+  box-shadow:0 6px 18px rgba(255,77,109,.25)}
+button.primary:hover{filter:brightness(1.07)}
+.brand .logo{filter:drop-shadow(0 0 7px rgba(255,90,60,.45))}
 button.ghost{background:transparent;border:1px solid var(--line)}
 input,select{font:inherit;background:var(--panel2);border:1px solid var(--line);
   color:var(--txt);border-radius:8px;padding:9px 11px;width:100%}
 header.topbar{display:flex;align-items:center;gap:16px;padding:14px 24px;
-  background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+  background:rgba(22,27,36,.82);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
 .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px}
 .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
 .pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
@@ -42,7 +46,8 @@ main{max-width:1200px;margin:0 auto;padding:24px}
 .tabs button.active{color:var(--txt);border-bottom-color:var(--accent)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:18px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;
-  display:flex;flex-direction:column}
+  display:flex;flex-direction:column;transition:transform .15s,box-shadow .15s,border-color .15s}
+.card:hover{transform:translateY(-3px);box-shadow:0 12px 30px rgba(0,0,0,.38);border-color:#33414f}
 .card .thumb{position:relative;aspect-ratio:16/9;background:#000;cursor:pointer;overflow:hidden}
 .card .thumb img{width:100%;height:100%;object-fit:cover}
 .card .thumb .play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
@@ -62,7 +67,8 @@ main{max-width:1200px;margin:0 auto;padding:24px}
 .card .actions{display:flex;gap:6px;margin-top:2px}
 .card .actions button{padding:6px 9px;font-size:13px;flex:1}
 .fav{color:var(--muted)}.fav.on{color:var(--warn)}
-.empty{text-align:center;color:var(--muted);padding:60px 20px}
+.empty{grid-column:1/-1;text-align:center;color:var(--muted);padding:60px 20px;
+  min-height:46vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .logbox{background:#0a0d12;border:1px solid var(--line);border-radius:12px;padding:14px;
   font-family:Consolas,monospace;font-size:12.5px;height:60vh;overflow:auto;white-space:pre-wrap}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;
@@ -86,7 +92,7 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>Aegis Clipper</title><style>%CSS%</style></head><body>
 <header class=topbar>
-  <div class=brand><span class=dot></span> Aegis Clipper</div>
+  <div class=brand><svg class=logo width=28 height=28 viewBox="0 0 48 48" fill=none><path d="M24 3 41 9 41 24 C41 35 33 42 24 45 C15 42 7 35 7 24 L7 9 Z" fill="#161b24" stroke="#ff5a3c" stroke-width="2.6"/><path d="M20 16 33 24 20 32 Z" fill="#ff5a3c"/></svg> Aegis Clipper</div>
   <div class=pills id=pills></div>
 </header>
 <main>
@@ -348,7 +354,7 @@ SETUP_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 .num{width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;display:inline-flex;
   align-items:center;justify-content:center;font-size:14px;font-weight:700}
 </style></head><body>
-<header class=topbar><div class=brand><span class=dot></span> Aegis Clipper — Setup</div></header>
+<header class=topbar><div class=brand><svg class=logo width=28 height=28 viewBox="0 0 48 48" fill=none><path d="M24 3 41 9 41 24 C41 35 33 42 24 45 C15 42 7 35 7 24 L7 9 Z" fill="#161b24" stroke="#ff5a3c" stroke-width="2.6"/><path d="M20 16 33 24 20 32 Z" fill="#ff5a3c"/></svg> Aegis Clipper — Setup</div></header>
 <main><div class=wizard>
 
   <div class=step>
@@ -369,6 +375,7 @@ SETUP_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
     </select></div>
     <div class=row><label>Clip length</label><input id=rec_clip value=30> <span class=hint style=margin:0>seconds saved per kill streak</span></div>
     <div class=row><label>Record only in-game</label><input type=checkbox id=rec_gate checked style="width:auto"> <span class=hint style=margin:0>only capture while CS2 is open (saves resources)</span></div>
+    <div class=row><label>Polished clips</label><input type=checkbox id=polish_en checked style="width:auto"> <span class=hint style=margin:0>add a Steam name + avatar + “ACE” intro and smooth fades to every clip</span></div>
     <div class=statusline id=encOut></div>
     <details style="margin-top:12px">
       <summary style="cursor:pointer;color:var(--muted)">Prefer OBS? Use it instead (advanced)</summary>
@@ -412,8 +419,9 @@ SETUP_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
       <p class=hint>Create a Google Cloud project, enable “YouTube Data API v3”, make a Desktop OAuth client, and point here at the downloaded file. A browser opens once to authorize.</p>
     </div>
 
-    <div class=foot style="margin-top:16px">
-      <button class=ghost onclick=testClip()>📤 Send a test clip</button>
+    <div class=foot style="margin-top:16px;flex-wrap:wrap;gap:10px">
+      <button class=ghost onclick=testClip()>🎬 Preview a clip (with ACE intro)</button>
+      <button class=ghost onclick=captureTest()>🖥️ Test screen capture</button>
       <span class=statusline id=testOut></span>
     </div>
   </div>
@@ -454,6 +462,7 @@ async function loadExisting(){
   const tg=u.telegram||{}, dc=u.discord||{}, yt=u.youtube||{};
   $('#rec_preset').value=r.preset||'medium'; $('#rec_clip').value=r.clip_seconds||30;
   $('#rec_gate').checked=r.only_when_game_running!==false;
+  $('#polish_en').checked=(c.polish||{}).enabled!==false;
   $('#use_obs').checked=(r.backend==='obs');
   $('#obs_replay_dir').value=o.replay_dir||'';
   $('#obs_port').value=o.port||4455; $('#obs_password').value=o.password||'';
@@ -468,6 +477,7 @@ function gather(){return {
   engine:{debounce_sec:parseFloat($('#debounce').value)||7, min_kills:parseInt($('#minkills').value)||1},
   recording:{backend:$('#use_obs').checked?'obs':'builtin', preset:$('#rec_preset').value,
        clip_seconds:parseInt($('#rec_clip').value)||30, only_when_game_running:$('#rec_gate').checked},
+  polish:{enabled:$('#polish_en').checked},
   obs:{replay_dir:$('#obs_replay_dir').value.trim(), port:parseInt($('#obs_port').value)||4455,
        password:$('#obs_password').value},
   uploads:{
@@ -486,12 +496,20 @@ async function save(){
 }
 
 async function testClip(){
-  $('#testOut').textContent='Generating + sending a test clip…';
-  await save();
+  $('#testOut').textContent='Building a preview clip with the ACE intro…';
+  if(!(await save()))return;
   const r=await api('/api/test-clip',{method:'POST'});
-  if(!r.ok){$('#testOut').innerHTML=`<span class=err>✗ ${r.detail||'failed'}</span>`;return;}
+  if(!r||!r.ok){$('#testOut').innerHTML=`<span class=err>✗ ${(r&&r.detail)||'failed'}</span>`;return;}
   const lines=Object.entries(r.results||{}).map(([k,v])=>`${k}: ${v}`).join(' · ');
-  $('#testOut').innerHTML=`<span class=ok>✓ Sent — ${lines}</span>`;
+  $('#testOut').innerHTML=`<span class=ok>✓ Done — open the Clips tab to watch it. ${lines}</span>`;
+}
+async function captureTest(){
+  $('#testOut').textContent='Recording 5s of your real screen…';
+  if(!(await save()))return;
+  const r=await api('/api/capture-test',{method:'POST'});
+  $('#testOut').innerHTML=r&&r.ok
+    ?'<span class=ok>✓ Screen captured — open the Clips tab to confirm it recorded your screen</span>'
+    :`<span class=err>✗ ${(r&&r.detail)||'capture failed (see Activity log)'}</span>`;
 }
 
 async function installGsi(){

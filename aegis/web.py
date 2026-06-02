@@ -179,6 +179,10 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     def api_test_clip():
         return jsonify(engine.trigger_test_clip())
 
+    @app.post("/api/capture-test")
+    def api_capture_test():
+        return jsonify(engine.trigger_capture_test())
+
     @app.post("/api/finish-setup")
     def api_finish_setup():
         cfg.set("first_run", False)

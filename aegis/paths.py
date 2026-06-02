@@ -69,5 +69,10 @@ def buffer_dir() -> Path:
     return _sub("buffer")
 
 
+def avatars_dir() -> Path:
+    """Cached Steam avatars used in clip intros (fetched once per SteamID)."""
+    return _sub("avatars")
+
+
 def logs_dir() -> Path:
     return _sub("logs")

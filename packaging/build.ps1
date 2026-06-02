@@ -59,6 +59,14 @@ if ($Ffmpeg) {
     Write-Host "ffmpeg vendored." -ForegroundColor Green
 }
 
+# 2b. Generate the app icon (best effort; Pillow is a project dependency) ----
+try {
+    & $py packaging\make_icon.py
+    Write-Host "App icon generated." -ForegroundColor Green
+} catch {
+    Write-Warning "Icon generation skipped (default icon will be used): $_"
+}
+
 # 3. PyInstaller ----------------------------------------------------------
 Write-Host "Running PyInstaller..." -ForegroundColor Cyan
 & $py -m PyInstaller --noconfirm --clean packaging\aegis.spec

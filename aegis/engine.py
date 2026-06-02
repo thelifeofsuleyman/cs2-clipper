@@ -22,7 +22,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import media, paths, uploaders
+from . import media, paths, polish, uploaders
 from .clips import Catalog, Clip
 from .config import Config
 from .log import log
@@ -53,6 +53,8 @@ class Engine:
             "map_name": "unknown",
             "round_n": 0,
             "side": "?",
+            "steam_name": "",
+            "steam_id": "",
         }
 
     # ───────── GSI ingestion ─────────
@@ -61,10 +63,13 @@ class Engine:
         match_stats = player.get("match_stats") or {}
         map_obj = p.get("map") or {}
 
+        provider = p.get("provider") or {}
         current_kills = int(match_stats.get("kills", 0))
         map_name = map_obj.get("name", "unknown")
         round_n = int(map_obj.get("round", 0))
         team = (player.get("team") or "?").upper()
+        steam_name = player.get("name") or ""
+        steam_id = str(player.get("steamid") or provider.get("steamid") or "")
 
         with self._lock:
             prev = self._state["last_match_kills"]
@@ -80,7 +85,8 @@ class Engine:
                 return
 
             self._state["pending_kills"] += diff
-            self._state.update(map_name=map_name, round_n=round_n, side=team)
+            self._state.update(map_name=map_name, round_n=round_n, side=team,
+                               steam_name=steam_name, steam_id=steam_id)
             log(f"Kill +{diff} (pending {self._state['pending_kills']}) "
                 f"on {map_name} round {round_n}")
             self._arm_timer()
@@ -137,6 +143,8 @@ class Engine:
             map_name = self._state["map_name"]
             round_n = self._state["round_n"]
             side = self._state["side"]
+            steam_name = self._state["steam_name"]
+            steam_id = self._state["steam_id"]
 
         if kills < int(self.cfg.get("engine.min_kills")):
             self._consume_pending(kills)         # below threshold: drop intentionally
@@ -151,7 +159,22 @@ class Engine:
             return                                # keep pending_kills intact
 
         self._consume_pending(kills)             # success: deduct what we clipped
-        clip = self._catalog_clip(clip_path, kills, map_name, round_n, side)
+
+        # Produce a share-ready version (intro card + fades); fall back to raw.
+        final = clip_path
+        try:
+            polished = polish.polish_clip(self.cfg, clip_path, kills, map_name,
+                                          steam_name, steam_id)
+            if polished is not None:
+                final = polished
+                try:
+                    clip_path.unlink()           # drop the raw once we have the polished one
+                except Exception:
+                    pass
+        except Exception as e:
+            log(f"Polish step errored, keeping raw clip: {e}")
+
+        clip = self._catalog_clip(final, kills, map_name, round_n, side)
         caption = format_caption(kills, map_name, round_n, side)
         self.fan_out(clip, caption)
 
@@ -197,18 +220,45 @@ class Engine:
         return results
 
     def trigger_test_clip(self) -> dict:
-        """Generate a synthetic clip and run it through the full pipeline so the
-        user can confirm cataloging + uploads work without playing CS2."""
+        """Generate a synthetic clip, run it through polish (so the user previews
+        the ACE intro card) + cataloging + uploads — all without playing CS2."""
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
             return {"ok": False, "detail": "ffmpeg not found — cannot make a test clip"}
         out = paths.clips_dir() / f"test_{int(time.time())}.mp4"
-        if media.make_test_clip(ffmpeg, out) is None:
+        if media.make_test_clip(ffmpeg, out, seconds=6) is None:
             return {"ok": False, "detail": "test clip generation failed"}
-        clip = self._catalog_clip(out, 1, "test", 0, "?")
-        self.catalog.update(clip.id, title="Test clip", tags=["test"])
+
+        name = self._state.get("steam_name") or "You"
+        sid = self._state.get("steam_id") or ""
+        try:
+            polished = polish.polish_clip(self.cfg, out, 5, "de_dust2", name, sid)
+            if polished is not None:
+                try:
+                    out.unlink()
+                except Exception:
+                    pass
+                out = polished
+        except Exception as e:
+            log(f"Test clip polish errored: {e}")
+
+        clip = self._catalog_clip(out, 5, "de_dust2", 0, "?")
+        self.catalog.update(clip.id, title="Test clip (ACE preview)", tags=["test"])
         results = self.fan_out(clip, "Aegis Clipper test clip")
         return {"ok": True, "clip_id": clip.id, "results": results}
+
+    def trigger_capture_test(self, seconds: int = 5) -> dict:
+        """Record a few seconds of the REAL screen — proves ddagrab capture + the
+        GPU encoder work on this machine, which the synthetic test can't."""
+        ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
+        if not ffmpeg:
+            return {"ok": False, "detail": "ffmpeg not found"}
+        out = paths.clips_dir() / f"capture_test_{int(time.time())}.mp4"
+        if not media.capture_screen_test(ffmpeg, out, seconds, self.cfg):
+            return {"ok": False, "detail": "screen capture failed — see the Activity log"}
+        clip = self._catalog_clip(out, 0, "screen capture test", 0, "?")
+        self.catalog.update(clip.id, title="Screen capture test", tags=["test"])
+        return {"ok": True, "clip_id": clip.id}
 
     def build_montage(self, clip_ids: list[str]) -> Path | None:
         """Stitch selected clips (newest-first order) into one montage file."""

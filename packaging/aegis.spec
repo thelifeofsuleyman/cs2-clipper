@@ -44,7 +44,10 @@ hidden = (
     + collect_submodules("webview")
 )
 # pythonnet (clr) backs pywebview's EdgeChromium window on Windows.
-for pkg in ("clr_loader", "pythonnet"):
+# PIL (Pillow) is imported lazily for the tray icon + clip intro cards, so its
+# imaging binaries must be collected explicitly or the frozen app can't compose
+# the Steam-name/ACE intro overlay.
+for pkg in ("clr_loader", "pythonnet", "PIL"):
     try:
         b, d, h = collect_all(pkg)
         binaries += b

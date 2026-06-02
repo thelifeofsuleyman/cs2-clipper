@@ -56,6 +56,13 @@ DEFAULTS: dict[str, Any] = {
         "discord":  {"enabled": False, "webhook_url": "", "max_mb": 25},
         "youtube":  {"enabled": False, "client_secrets": "", "privacy": "unlisted"},
     },
+    "polish": {
+        "enabled": True,            # turn each raw clip into a share-ready video
+        "fade": True,               # fade in/out
+        "intro": True,              # show killer's Steam name + avatar + kill text
+        "intro_seconds": 3.0,
+        "watermark": True,          # subtle Aegis mark
+    },
     "montage": {
         "music_path": "",
         "vertical_export": False,   # also render a 9:16 mobile cut
