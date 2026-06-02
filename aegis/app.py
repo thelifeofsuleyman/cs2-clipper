@@ -173,6 +173,37 @@ def _run_tray_browser(cfg, port: int) -> None:
     icon.run()
 
 
+def _existing_instance(port: int) -> bool:
+    """True if our app is already serving on this port (single-instance check)."""
+    import json
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1) as r:
+            return bool(json.loads(r.read().decode()).get("ok"))
+    except Exception:
+        return False
+
+
+def _startup_cleanup() -> None:
+    """Reclaim disk that a crash or interrupted update can leave behind:
+    orphaned rolling-buffer segment dirs and the ~120 MB downloaded installer."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    try:
+        for d in paths.buffer_dir().glob("rec_*"):
+            shutil.rmtree(d, ignore_errors=True)
+    except Exception:
+        pass
+    try:
+        leftover = Path(tempfile.gettempdir()) / "AegisClipper-Setup.exe"
+        if leftover.exists():
+            leftover.unlink()
+            log("Cleaned up a leftover update installer from %TEMP%")
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     headless = "--headless" in argv or "--no-tray" in argv
@@ -182,6 +213,18 @@ def main(argv: list[str] | None = None) -> int:
     if "--port" in argv:
         port = int(argv[argv.index("--port") + 1])
         cfg.set("engine.gsi_port", port)
+
+    # If an instance is already serving on this port, just open it and exit so a
+    # double-launch doesn't crash trying to bind a busy port.
+    if _existing_instance(port):
+        log("Aegis Clipper is already running — opening the dashboard.")
+        if not headless:
+            webbrowser.open(f"http://127.0.0.1:{port}/")
+        return 0
+
+    # Reclaim disk left by previous crashes/updates BEFORE building the recorder
+    # (which creates a fresh buffer dir of its own).
+    _startup_cleanup()
 
     catalog = Catalog()
     engine = Engine(cfg, catalog)

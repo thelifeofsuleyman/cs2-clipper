@@ -13,6 +13,7 @@ dist/
 *.spec.bak
 packaging/Output/
 packaging/vendor/
+packaging/_version_info.txt
 *.egg-info/
 
 # OS

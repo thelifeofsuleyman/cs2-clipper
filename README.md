@@ -169,6 +169,39 @@ and applies the update in place. No manual download, no lost configuration.
 
 ---
 
+## "Windows protected your PC" / antivirus warning
+
+The installer isn't code-signed, so Windows SmartScreen shows **"unrecognized
+app."** It's not malware — the source is all here — but a warning is expected for
+any new, unsigned program. To install: click **More info → Run anyway**.
+
+There is **no legitimate way to make this prompt disappear except code signing** —
+that's the whole point of the check, and "tricks" to bypass it are what actual
+malware does. The real options, in order of cost/effectiveness:
+
+- **Azure Trusted Signing** (~$10/month, modern, needs identity verification) —
+  the cheapest path to a signed exe.
+- **EV code-signing certificate** (~$300–500/yr, hardware token) — gives
+  **instant** SmartScreen trust, no warning from day one.
+- **OV certificate** (~$100–300/yr) — signs the exe, but reputation still builds
+  over downloads.
+- **Do nothing** — reputation slowly improves as more people run it; users use
+  "Run anyway."
+
+What's already done for free: the exe carries proper **version metadata**
+(publisher, product, version), which avoids the "Unknown publisher" line and
+reduces antivirus false-positives common to PyInstaller builds. Signing is the
+only thing that removes the prompt entirely.
+
+## Disk usage & updates
+
+Updates don't pile up: the downloaded installer is **deleted right after it
+applies**, and on every launch the app **clears leftover installers and stale
+recording-buffer files** from previous crashes. So repeated updates don't grow
+your disk. (Each update still *downloads* ~120 MB — to cut that roughly in half,
+drop the bundled `ffprobe`; see the size notes.) Your saved clips live in the
+clips folder and are yours to keep or delete.
+
 ## Where things live
 
 App state (settings, clip catalog, thumbnails, montages, logs) is stored under

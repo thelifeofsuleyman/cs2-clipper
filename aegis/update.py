@@ -144,19 +144,42 @@ def _download_and_install(info: UpdateInfo) -> None:
         _set_progress(state="error", detail=str(e)[:200])
         return
 
-    _set_progress(state="installing", pct=100.0, detail="launching installer")
-    log("Update downloaded — launching installer and exiting.")
-    # /SILENT installs without prompts; CLOSEAPPLICATIONS+RESTARTAPPLICATIONS lets
-    # Inno close this running app, swap files, and relaunch the new version.
+    _set_progress(state="installing", pct=100.0, detail="installing")
+    log("Update downloaded — exiting so the installer can replace files.")
     try:
-        subprocess.Popen([dest, "/SILENT", "/CLOSEAPPLICATIONS",
-                          "/RESTARTAPPLICATIONS", "/NORESTART"])
+        _launch_installer_and_exit(dest)
     except Exception as e:
         _set_progress(state="error", detail=str(e)[:200])
-        return
 
-    # Give the installer a moment to start, then quit so files unlock.
-    threading.Timer(2.0, lambda: os._exit(0)).start()
+
+def _launch_installer_and_exit(installer: str) -> None:
+    """Run the installer AFTER this process (and its ffmpeg child) have exited.
+
+    The old updater launched the installer and quit ~2 s later — but the
+    installer reached the file-replace step while AegisClipper.exe / ffmpeg.exe
+    were still locked, failing with "DeleteFile failed; code 5". Instead, spawn a
+    detached shell that waits a few seconds for us to fully exit (the Job Object
+    kills ffmpeg the moment we do), installs silently, deletes the downloaded
+    installer (so it doesn't pile up in %TEMP%), then relaunches the new app.
+    """
+    import os
+    import subprocess
+
+    exe = sys.executable                  # the install-dir AegisClipper.exe to relaunch
+    DETACHED_PROCESS = 0x00000008
+    CREATE_NEW_PROCESS_GROUP = 0x00000200
+    cmd = (
+        "timeout /t 4 /nobreak >nul & "
+        f'"{installer}" /SILENT /SUPPRESSMSGBOXES /NORESTART & '
+        f'del /q "{installer}" >nul 2>&1 & '
+        f'start "" "{exe}"'
+    )
+    subprocess.Popen(
+        ["cmd", "/c", cmd],
+        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+        close_fds=True,
+    )
+    os._exit(0)   # leave now; the 4 s window covers our shutdown + ffmpeg kill
 
 
 # Backwards-compatible alias.

@@ -53,6 +53,43 @@ for pkg in ("clr_loader", "pythonnet"):
     except Exception:
         pass
 
+# Embed Windows version metadata (CompanyName/ProductName/version). An exe with
+# no version resource looks more suspicious to antivirus heuristics and shows
+# "Unknown publisher"; real metadata is basic hygiene. (It does NOT replace code
+# signing — only a certificate removes the SmartScreen prompt.)
+version_obj = None
+try:
+    import re as _re
+    from PyInstaller.utils.win32.versioninfo import (
+        VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable, StringStruct,
+        VarFileInfo, VarStruct,
+    )
+    _vtext = open(os.path.join(ROOT, "aegis", "__init__.py"), encoding="utf-8").read()
+    _ver = _re.search(r'__version__\s*=\s*"([^"]+)"', _vtext).group(1)
+    _vt = tuple(int(x) for x in (_ver.split(".") + ["0", "0", "0"])[:4])
+    version_obj = VSVersionInfo(
+        ffi=FixedFileInfo(filevers=_vt, prodvers=_vt),
+        kids=[
+            StringFileInfo([StringTable("040904B0", [
+                StringStruct("CompanyName", "Aegis Clipper"),
+                StringStruct("FileDescription", "Aegis Clipper — automatic CS2 highlight clipper"),
+                StringStruct("FileVersion", _ver),
+                StringStruct("InternalName", "AegisClipper"),
+                StringStruct("OriginalFilename", "AegisClipper.exe"),
+                StringStruct("ProductName", "Aegis Clipper"),
+                StringStruct("ProductVersion", _ver),
+                StringStruct("LegalCopyright", "MIT License"),
+            ])]),
+            VarFileInfo([VarStruct("Translation", [0x0409, 1200])]),
+        ],
+    )
+    _vpath = os.path.join(ROOT, "packaging", "_version_info.txt")
+    with open(_vpath, "w", encoding="utf-8") as _f:
+        _f.write(str(version_obj))
+    version_obj = _vpath
+except Exception:
+    version_obj = None
+
 a = Analysis(
     [os.path.join(ROOT, "clipper.py")],
     pathex=[ROOT],
@@ -71,6 +108,7 @@ exe = EXE(
     exclude_binaries=True,
     name="AegisClipper",
     console=False,                      # windowed app; logs go to the tray/dashboard
+    version=version_obj,                # embedded Windows version metadata
     icon=os.path.join(ROOT, "packaging", "aegis.ico") if os.path.exists(
         os.path.join(ROOT, "packaging", "aegis.ico")) else None,
 )

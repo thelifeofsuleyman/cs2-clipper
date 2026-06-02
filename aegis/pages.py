@@ -30,8 +30,12 @@ header.topbar{display:flex;align-items:center;gap:16px;padding:14px 24px;
   padding:5px 10px;border-radius:20px;font-size:12px;color:var(--muted)}
 .pill b{color:var(--txt)}
 .pill .led{width:8px;height:8px;border-radius:50%;background:var(--muted)}
-.pill .led.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.pill .led.on{background:var(--ok);box-shadow:0 0 8px var(--ok);animation:pulse 1.6s infinite}
 .pill .led.off{background:var(--err)}
+.appfoot{max-width:1200px;margin:0 auto;padding:18px 24px 32px;color:var(--muted);
+  font-size:12px;display:flex;gap:14px;align-items:center;border-top:1px solid var(--line)}
+.appfoot a{color:var(--muted)}.appfoot a:hover{color:var(--txt)}
 main{max-width:1200px;margin:0 auto;padding:24px}
 .tabs{display:flex;gap:6px;margin-bottom:20px}
 .tabs button{background:transparent;color:var(--muted);border-radius:0;border-bottom:2px solid transparent;padding:8px 14px}
@@ -109,6 +113,7 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
       <span class=sel id=selInfo style=display:none></span>
       <button class=primary id=makeMontage style="display:none">🎬 Build montage</button>
       <button class=ghost id=cancelSel style=display:none>Cancel</button>
+      <span class=sel id=clipCount style=margin-left:auto></span>
     </div>
     <div class=grid id=clipGrid></div>
   </section>
@@ -121,6 +126,12 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
     <div class=logbox id=logBox>Loading…</div>
   </section>
 </main>
+<footer class=appfoot>
+  <span>Aegis Clipper <b>v%VER%</b></span>
+  <a href="https://github.com/thelifeofsuleyman/cs2-clipper/releases" target=_blank rel=noopener>Releases</a>
+  <a href="/setup">Settings</a>
+  <span id=footStatus style=margin-left:auto></span>
+</footer>
 
 <div class=modal id=modal><span class=close id=modalClose>×</span><video id=player controls></video></div>
 <div class=toast id=toast></div>
@@ -129,7 +140,7 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let selMode=false, selected=new Set();
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
-function api(u,o){return fetch(u,o).then(r=>r.json());}
+async function api(u,o){try{const r=await fetch(u,o);if(!r.ok)return null;return await r.json();}catch(e){return null;}}
 
 // ----- tabs -----
 $$('.tabs button[data-tab]').forEach(b=>b.onclick=()=>{
@@ -144,6 +155,7 @@ $$('.tabs button[data-tab]').forEach(b=>b.onclick=()=>{
 // ----- status pills -----
 async function loadStatus(){
   const s=await api('/api/status');
+  if(!s)return;
   const led=(on)=>`<span class="led ${on?'on':'off'}"></span>`;
   const rec=s.recorder||{};
   const encTxt=rec.encoder&&rec.encoder!=='?'?` · ${rec.encoder}`:'';
@@ -151,14 +163,18 @@ async function loadStatus(){
     `<span class=pill>${led(s.capturing)} ${s.capturing?'Recording':'Idle'}${encTxt}</span>`+
     `<span class=pill>Pending kills <b>${s.pending_kills}</b></span>`+
     `<span class=pill>Targets <b>${(s.enabled_targets||[]).join(', ')||'none'}</b></span>`;
+  const fs=$('#footStatus');
+  if(fs)fs.textContent=rec.backend?('recorder: '+rec.backend+(rec.encoder&&rec.encoder!=='?'?' · '+rec.encoder:'')):'';
 }
 
 // ----- clips -----
 function tgClass(v){return v==='ok'?'ok':(v?'err':'');}
 async function loadClips(){
-  const {clips}=await api('/api/clips');
+  const r=await api('/api/clips');
+  const clips=(r&&r.clips)||[];
   const g=$('#clipGrid');
-  if(!clips.length){g.innerHTML='<div class=empty>No clips yet. Get a kill in CS2 with the Replay Buffer running — your highlights will appear here.</div>';return;}
+  $('#clipCount').textContent=clips.length?`${clips.length} clip${clips.length===1?'':'s'}`:'';
+  if(!clips.length){g.innerHTML='<div class=empty><div style="font-size:42px;margin-bottom:8px">🎬</div>No clips yet. Hop into CS2 and get a kill — your highlights show up here automatically.<br><span style="font-size:12px">Tip: use “Send a test clip” in Settings to check your setup now.</span></div>';return;}
   g.innerHTML=clips.map(c=>`
     <div class="card ${selected.has(c.id)?'sel':''}" data-id="${c.id}">
       <div class=check>✓</div>
@@ -182,14 +198,14 @@ async function loadClips(){
   bindCards();
   updateSelBar();   // keep the montage bar in sync after a re-render
 }
-function esc(s){return (s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+function esc(s){return (s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 
 function bindCards(){
   $('#clipGrid').classList.toggle('selmode',selMode);
   $$('[data-play]').forEach(el=>el.onclick=()=>{
     const id=el.dataset.play;
     if(selMode){toggleSel(id);return;}
-    $('#player').src=`/clip/${id}/video`;$('#modal').classList.add('show');$('#player').play();
+    $('#player').src=`/clip/${id}/video`;$('#modal').classList.add('show');$('#player').play().catch(()=>{});
   });
   $$('[data-edit]').forEach(el=>el.onblur=()=>{
     api(`/api/clips/${el.dataset.edit}`,{method:'POST',headers:{'Content-Type':'application/json'},
@@ -201,8 +217,11 @@ function bindCards(){
       body:JSON.stringify({favorite:on})});b.classList.toggle('on',on);
   });
   $$('[data-share]').forEach(b=>b.onclick=async()=>{
-    b.textContent='…';const r=await api(`/api/clips/${b.dataset.share}/share`,{method:'POST'});
-    b.textContent='Share';toast('Shared: '+Object.keys(r.results||{}).join(', '));loadClips();
+    b.disabled=true;b.textContent='…';
+    try{
+      const r=await api(`/api/clips/${b.dataset.share}/share`,{method:'POST'});
+      toast(r&&r.results?('Shared: '+Object.keys(r.results).join(', ')):'Share failed');
+    }finally{b.disabled=false;b.textContent='Share';loadClips();}
   });
   $$('[data-del]').forEach(b=>b.onclick=async()=>{
     if(!confirm('Delete this clip from the library? (the video file stays on disk)'))return;
@@ -219,30 +238,33 @@ $('#selBtn').onclick=()=>{selMode=true;$('#selBtn').style.display='none';$('#can
 $('#cancelSel').onclick=()=>{selMode=false;selected.clear();$('#selBtn').style.display='';
   $('#cancelSel').style.display='none';updateSelBar();loadClips();};
 $('#makeMontage').onclick=async()=>{
-  $('#makeMontage').textContent='Building… (this can take a minute)';
-  const r=await api('/api/montage',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({clip_ids:[...selected]})});
-  $('#makeMontage').textContent='🎬 Build montage';
-  if(r.ok){toast('Montage ready!');$('#cancelSel').click();}else{toast(r.error||'Failed');}
+  const btn=$('#makeMontage');btn.disabled=true;btn.textContent='Building… (up to a minute)';
+  try{
+    const r=await api('/api/montage',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({clip_ids:[...selected]})});
+    if(r&&r.ok){toast('Montage ready!');$('#cancelSel').click();}
+    else{toast((r&&r.error)||'Montage failed');}
+  }finally{btn.disabled=false;btn.textContent='🎬 Build montage';}
 };
 
 // ----- montages -----
 async function loadMontages(){
-  const {montages}=await api('/api/montages');const g=$('#montGrid');
+  const mr=await api('/api/montages');const montages=(mr&&mr.montages)||[];const g=$('#montGrid');
   if(!montages.length){g.innerHTML='<div class=empty>No montages yet. Select clips on the Clips tab and hit “Build montage”.</div>';return;}
-  g.innerHTML=montages.map(m=>`<div class=card><div class=thumb data-mp="${m}"><div class=play>▶</div></div>
+  g.innerHTML=montages.map(m=>`<div class=card><div class=thumb data-mp="${esc(m)}"><div class=play>▶</div></div>
     <div class=body><div class=title>${esc(m)}</div></div></div>`).join('');
-  $$('[data-mp]').forEach(el=>el.onclick=()=>{$('#player').src=`/montage/${el.dataset.mp}`;
-    $('#modal').classList.add('show');$('#player').play();});
+  $$('[data-mp]').forEach(el=>el.onclick=()=>{$('#player').src='/montage/'+encodeURIComponent(el.dataset.mp);
+    $('#modal').classList.add('show');$('#player').play().catch(()=>{});});
 }
 
 // ----- logs -----
-async function loadLogs(){const {lines}=await api('/api/logs');
+async function loadLogs(){const lr=await api('/api/logs');const lines=(lr&&lr.lines)||[];
   const b=$('#logBox');b.textContent=lines.join('\\n');b.scrollTop=b.scrollHeight;}
 
 // ----- modal -----
-$('#modalClose').onclick=()=>{$('#modal').classList.remove('show');$('#player').pause();};
+$('#modalClose').onclick=()=>{$('#modal').classList.remove('show');const p=$('#player');p.pause();p.removeAttribute('src');p.load();};
 $('#modal').onclick=e=>{if(e.target===$('#modal')){$('#modalClose').onclick();}};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#modal').classList.contains('show'))$('#modalClose').onclick();});
 
 // ----- auto-update -----
 async function checkUpdate(){
@@ -411,7 +433,7 @@ SETUP_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 
 <script>
 const $=s=>document.querySelector(s);
-function api(u,o){return fetch(u,o).then(r=>r.json());}
+async function api(u,o){try{const r=await fetch(u,o);if(!r.ok)return null;return await r.json();}catch(e){return null;}}
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
 
 async function detect(){
@@ -427,18 +449,19 @@ async function detect(){
 }
 
 async function loadExisting(){
-  const c=await api('/api/config');
-  const r=c.recording||{};
+  const c=await api('/api/config')||{};
+  const r=c.recording||{}, o=c.obs||{}, e=c.engine||{}, u=c.uploads||{};
+  const tg=u.telegram||{}, dc=u.discord||{}, yt=u.youtube||{};
   $('#rec_preset').value=r.preset||'medium'; $('#rec_clip').value=r.clip_seconds||30;
   $('#rec_gate').checked=r.only_when_game_running!==false;
   $('#use_obs').checked=(r.backend==='obs');
-  $('#obs_replay_dir').value=c.obs.replay_dir||'';
-  $('#obs_port').value=c.obs.port; $('#obs_password').value=c.obs.password||'';
-  $('#debounce').value=c.engine.debounce_sec; $('#minkills').value=c.engine.min_kills;
-  $('#tg_en').checked=c.uploads.telegram.enabled; $('#tg_token').value=c.uploads.telegram.bot_token||'';
-  $('#tg_chat').value=c.uploads.telegram.chat_id||'';
-  $('#dc_en').checked=c.uploads.discord.enabled; $('#dc_url').value=c.uploads.discord.webhook_url||'';
-  $('#yt_en').checked=c.uploads.youtube.enabled; $('#yt_secrets').value=c.uploads.youtube.client_secrets||'';
+  $('#obs_replay_dir').value=o.replay_dir||'';
+  $('#obs_port').value=o.port||4455; $('#obs_password').value=o.password||'';
+  $('#debounce').value=e.debounce_sec||7; $('#minkills').value=e.min_kills||1;
+  $('#tg_en').checked=!!tg.enabled; $('#tg_token').value=tg.bot_token||''; $('#tg_chat').value=tg.chat_id||'';
+  $('#dc_en').checked=!!dc.enabled; $('#dc_url').value=dc.webhook_url||'';
+  $('#yt_en').checked=!!yt.enabled; $('#yt_secrets').value=yt.client_secrets||'';
+  $('#yt_privacy').value=yt.privacy||'unlisted';
 }
 
 function gather(){return {
@@ -485,7 +508,7 @@ async function finish(){
   location.href='/';
 }
 
-loadExisting().then(detect);
+loadExisting().then(detect).catch(detect);
 </script></body></html>"""
 
 # Inline the shared CSS into both pages.

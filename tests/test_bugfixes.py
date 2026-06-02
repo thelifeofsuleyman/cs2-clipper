@@ -99,3 +99,41 @@ def test_below_min_kills_drops_pending(cfg):
 def test_detect_cs2_cfg_dir_never_raises():
     # On CI/Linux winreg is absent; must degrade to None, not raise.
     assert config.detect_cs2_cfg_dir() is None or isinstance(config.detect_cs2_cfg_dir(), Path)
+
+
+# ── crash-resilience helpers ──
+def test_startup_cleanup_removes_stale_buffers(data_dir):
+    from aegis import app
+    stale = paths.buffer_dir() / "rec_deadbeef"
+    stale.mkdir(parents=True)
+    (stale / "seg_000.ts").write_bytes(b"x")
+    app._startup_cleanup()
+    assert not stale.exists()                  # stale buffer reclaimed
+
+
+def test_existing_instance_false_when_port_free():
+    from aegis import app
+    assert app._existing_instance(59421) is False   # nothing listening there
+
+
+def test_winjob_guard_is_safe_without_handle():
+    from aegis import winjob
+    winjob.guard(None)                         # must not raise
+
+
+def test_recorder_save_after_stop_is_graceful(cfg, tmp_path):
+    r = recorder.BuiltinRecorder(cfg)
+    r.stop()                                   # buffer dir removed
+    assert r.save(30, tmp_path / "o.mp4") is None
+
+
+def test_resolve_ffmpeg_finds_bundled_in_meipass(tmp_path, monkeypatch):
+    """The frozen-build regression: ffmpeg lands in _internal (sys._MEIPASS), not
+    next to the .exe. resolve_ffmpeg must look there."""
+    import sys
+    from aegis import media
+    name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+    bundled = tmp_path / name
+    bundled.write_bytes(b"x")
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    assert media.resolve_ffmpeg() == str(bundled)

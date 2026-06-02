@@ -44,7 +44,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     def dashboard():
         if cfg.get("first_run"):
             return redirect("/setup")
-        return DASHBOARD_HTML
+        return DASHBOARD_HTML.replace("%VER%", __version__)
 
     @app.get("/setup")
     def setup():

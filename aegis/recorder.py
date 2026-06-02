@@ -260,6 +260,10 @@ class BuiltinRecorder(Recorder):
                     cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     creationflags=_NO_WINDOW,
                 )
+            # Ensure this ffmpeg dies if the app crashes / is killed / self-updates,
+            # so it can't keep recording or lock the bundled ffmpeg.exe.
+            from . import winjob
+            winjob.guard(self._proc)
         except Exception as e:
             log(f"Built-in recorder failed to start: {e}")
             self._proc = None

@@ -21,13 +21,32 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 def resolve_ffmpeg(override: str = "") -> str | None:
+    """Find the ffmpeg binary across every layout we ship in.
+
+    PyInstaller 6 puts bundled binaries in an `_internal\\` subfolder (exposed at
+    runtime as sys._MEIPASS), NOT next to the .exe — so we must check there first,
+    then next to the exe, then PATH. Missing this is why a frozen build reported
+    "ffmpeg missing" even though it was bundled.
+    """
+    name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
     if override and Path(override).exists():
         return override
-    bundled = Path(sys.argv[0]).resolve().parent / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
-    if bundled.exists():
-        return str(bundled)
-    found = shutil.which("ffmpeg")
-    return found
+
+    candidates: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)        # PyInstaller bundle dir
+    if meipass:
+        candidates.append(Path(meipass) / name)
+    exe_dir = Path(sys.executable).resolve().parent  # install dir of the .exe
+    candidates += [exe_dir / name, exe_dir / "_internal" / name]
+    candidates.append(Path(sys.argv[0]).resolve().parent / name)  # dev / script run
+
+    for c in candidates:
+        try:
+            if c.exists():
+                return str(c)
+        except Exception:
+            continue
+    return shutil.which("ffmpeg")
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
