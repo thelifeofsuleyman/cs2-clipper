@@ -72,6 +72,13 @@ def test_update_check_endpoint(app_client):
     assert j["update"] is None and "current" in j
 
 
+def test_update_progress_endpoint_shape(app_client):
+    client, *_ = app_client
+    p = client.get("/api/update/progress").get_json()
+    for key in ("state", "downloaded", "total", "pct"):
+        assert key in p
+
+
 def test_test_clip_endpoint_graceful_without_ffmpeg(app_client, monkeypatch):
     client, *_ = app_client
     # Force "no ffmpeg" so the endpoint reports a clean error instead of crashing.

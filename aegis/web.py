@@ -195,7 +195,12 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         info = update.check(cfg)
         if not info:
             return jsonify(ok=False, detail="already up to date"), 400
-        return jsonify(update.apply(info))
+        return jsonify(update.start_apply(info))
+
+    @app.get("/api/update/progress")
+    def api_update_progress():
+        from . import update
+        return jsonify(update.get_progress())
 
     return app
 

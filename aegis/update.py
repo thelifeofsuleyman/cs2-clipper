@@ -82,16 +82,41 @@ def check(cfg: Config) -> UpdateInfo | None:
     return info
 
 
-def apply(info: UpdateInfo) -> dict:
-    """Download and launch the installer silently, then exit. Returns a status
-    dict if it could not proceed (so the API can report it)."""
+# Live progress so the UI can show a bar during the (multi-minute) download.
+_progress = {"state": "idle", "downloaded": 0, "total": 0, "pct": 0.0, "detail": ""}
+_progress_lock = threading.Lock()
+
+
+def get_progress() -> dict:
+    with _progress_lock:
+        return dict(_progress)
+
+
+def _set_progress(**kw) -> None:
+    with _progress_lock:
+        _progress.update(kw)
+
+
+def start_apply(info: UpdateInfo) -> dict:
+    """Begin the update on a background thread and return immediately so the UI
+    can poll get_progress(). Source builds (not frozen) just open the page."""
     frozen = getattr(sys, "frozen", False)
     if not frozen or not info.asset_url:
-        # Dev build or no installer asset: just open the release page.
         if info.html_url:
             webbrowser.open(info.html_url)
+        _set_progress(state="manual", detail="opened release page")
         return {"ok": False, "detail": "opened release page (no in-place update for source builds)"}
 
+    with _progress_lock:
+        if _progress["state"] in ("downloading", "installing"):
+            return {"ok": True, "detail": "already in progress"}
+        _progress.update(state="downloading", downloaded=0, total=0, pct=0.0, detail="")
+
+    threading.Thread(target=_download_and_install, args=(info,), daemon=True).start()
+    return {"ok": True, "detail": "started"}
+
+
+def _download_and_install(info: UpdateInfo) -> None:
     import os
     import subprocess
     import tempfile
@@ -100,13 +125,23 @@ def apply(info: UpdateInfo) -> dict:
         dest = os.path.join(tempfile.gettempdir(), "AegisClipper-Setup.exe")
         with requests.get(info.asset_url, stream=True, timeout=120) as r:
             r.raise_for_status()
+            total = int(r.headers.get("Content-Length", 0) or 0)
+            _set_progress(total=total)
+            done = 0
             with open(dest, "wb") as f:
                 for chunk in r.iter_content(chunk_size=1 << 16):
+                    if not chunk:
+                        continue
                     f.write(chunk)
+                    done += len(chunk)
+                    pct = round(done / total * 100, 1) if total else 0.0
+                    _set_progress(downloaded=done, pct=pct)
     except Exception as e:
         log(f"Update download failed: {e}")
-        return {"ok": False, "detail": str(e)}
+        _set_progress(state="error", detail=str(e)[:200])
+        return
 
+    _set_progress(state="installing", pct=100.0, detail="launching installer")
     log("Update downloaded — launching installer and exiting.")
     # /SILENT installs without prompts; CLOSEAPPLICATIONS+RESTARTAPPLICATIONS lets
     # Inno close this running app, swap files, and relaunch the new version.
@@ -114,8 +149,13 @@ def apply(info: UpdateInfo) -> dict:
         subprocess.Popen([dest, "/SILENT", "/CLOSEAPPLICATIONS",
                           "/RESTARTAPPLICATIONS", "/NORESTART"])
     except Exception as e:
-        return {"ok": False, "detail": str(e)}
+        _set_progress(state="error", detail=str(e)[:200])
+        return
 
     # Give the installer a moment to start, then quit so files unlock.
-    threading.Timer(1.5, lambda: os._exit(0)).start()
-    return {"ok": True, "detail": "installing update…"}
+    threading.Timer(2.0, lambda: os._exit(0)).start()
+
+
+# Backwards-compatible alias.
+def apply(info: UpdateInfo) -> dict:
+    return start_apply(info)

@@ -86,12 +86,15 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   <div class=pills id=pills></div>
 </header>
 <main>
-  <div id=updateBanner style="display:none;align-items:center;gap:12px;background:#1a2433;
+  <div id=updateBanner style="display:none;flex-wrap:wrap;align-items:center;gap:12px;background:#1a2433;
     border:1px solid var(--accent2);border-radius:12px;padding:12px 16px;margin-bottom:18px">
     <span style="font-size:18px">⬆️</span>
-    <div style="flex:1"><b id=upVer></b> is available <span id=upNotes style="color:var(--muted)"></span></div>
+    <div style="flex:1;min-width:200px"><b id=upVer></b> is available <span id=upNotes style="color:var(--muted)"></span></div>
     <button class=primary id=upBtn>Update now</button>
     <button class=ghost id=upDismiss>Later</button>
+    <div id=upBar style="display:none;flex-basis:100%;height:8px;background:var(--line);border-radius:4px;overflow:hidden">
+      <div id=upBarFill style="height:100%;width:0%;background:var(--accent2);transition:width .3s"></div>
+    </div>
   </div>
   <div class=tabs>
     <button class=active data-tab=clips>Clips</button>
@@ -249,12 +252,41 @@ async function checkUpdate(){
     $('#upNotes').textContent=r.update.notes?('— '+r.update.notes.split('\\n')[0].slice(0,80)):'';
     $('#updateBanner').style.display='flex';
     $('#upBtn').onclick=async()=>{
-      $('#upBtn').textContent='Updating…';$('#upBtn').disabled=true;
+      $('#upBtn').disabled=true;$('#upBtn').textContent='Starting…';
       const res=await api('/api/update/apply',{method:'POST'});
-      toast(res.ok?'Installing update — the app will restart.':(res.detail||'Update failed'));
+      if(!res.ok){toast(res.detail||'Update failed');$('#upBtn').textContent='Update now';$('#upBtn').disabled=false;return;}
+      $('#upBar').style.display='block';$('#upDismiss').style.display='none';
+      pollUpdate();
     };
     $('#upDismiss').onclick=()=>$('#updateBanner').style.display='none';
   }catch(e){}
+}
+function pollUpdate(){
+  const mb=b=>(b/1048576).toFixed(0);
+  const iv=setInterval(async()=>{
+    let p;
+    try{p=await api('/api/update/progress');}
+    catch(e){ // server exited during install -> expected
+      clearInterval(iv);
+      $('#upBarFill').style.width='100%';
+      $('#upBtn').textContent='Restarting…';
+      $('#upNotes').textContent='Installing — the app will reopen on the new version.';
+      return;
+    }
+    if(p.state==='downloading'){
+      $('#upBarFill').style.width=(p.pct||0)+'%';
+      $('#upBtn').textContent=p.total?`Downloading ${p.pct}%`:'Downloading…';
+      $('#upNotes').textContent=p.total?`${mb(p.downloaded)} / ${mb(p.total)} MB`:'';
+    }else if(p.state==='installing'){
+      $('#upBarFill').style.width='100%';
+      $('#upBtn').textContent='Installing — restarting…';
+      $('#upNotes').textContent='The app will close and reopen on the new version.';
+    }else if(p.state==='error'){
+      clearInterval(iv);toast('Update failed: '+(p.detail||''));
+      $('#upBtn').textContent='Update now';$('#upBtn').disabled=false;
+      $('#upBar').style.display='none';$('#upDismiss').style.display='';
+    }
+  },600);
 }
 
 loadStatus();loadClips();checkUpdate();
