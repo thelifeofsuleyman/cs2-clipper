@@ -63,7 +63,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "ffmpeg_path": "",  # blank = look on PATH / bundled
     "update": {
-        "repo": "OWNER/REPO",   # GitHub slug to check Releases against; set per build
+        "repo": "thelifeofsuleyman/cs2-clipper",  # GitHub slug for the update check
         "auto_check": True,     # check once on startup and surface a banner
     },
 }
