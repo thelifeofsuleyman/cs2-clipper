@@ -393,22 +393,32 @@ setInterval(()=>{
 
 SETUP_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>Aegis Clipper — Setup</title><style>%CSS%
-.wizard{max-width:680px;margin:0 auto}
-.step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:18px}
-.step h3{margin:0 0 4px;display:flex;align-items:center;gap:10px}
-.step .hint{color:var(--muted);font-size:13px;margin:0 0 16px}
-.row{display:flex;gap:10px;align-items:center;margin-bottom:12px}
-.row label{width:150px;color:var(--muted);flex-shrink:0}
-.statusline{font-size:13px;margin-top:6px}
+<title>Aegis Clipper — Settings</title><style>%CSS%
+.wizard{max-width:720px;margin:0 auto}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:var(--r2);padding:18px 22px;margin-bottom:16px}
+.step h3{margin:0 0 6px;display:flex;align-items:center;gap:11px;font-size:15px;font-weight:600}
+.step .hint{color:var(--muted);font-size:12.5px;margin:0 0 14px;line-height:1.5}
+.num{width:24px;height:24px;border-radius:8px;background:var(--accent);color:#fff;flex:none;
+  display:inline-grid;place-items:center;font-size:13px;font-weight:700}
+.row{display:flex;gap:16px;align-items:center;padding:11px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:none;padding-top:3px}
+.row label{flex:none;width:165px;color:var(--muted);font-size:13px}
+.row input,.row select{flex:1;max-width:340px;width:auto}
+.row input[type=checkbox]{flex:none}
+.row .hint{margin:0;font-size:12px;color:var(--faint)}
+input[type=checkbox]{accent-color:var(--accent);width:18px;height:18px;cursor:pointer}
+.statusline{font-size:13px;margin-top:6px;line-height:1.75}
 .ok{color:var(--ok)}.err{color:var(--err)}
-.toggle{display:flex;align-items:center;gap:10px;margin-bottom:14px;font-weight:600}
-.collapse{padding-left:4px;border-left:2px solid var(--line);margin-left:6px;padding-bottom:2px}
-.foot{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
-.num{width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;display:inline-flex;
-  align-items:center;justify-content:center;font-size:14px;font-weight:700}
+.toggle{display:flex;align-items:center;gap:10px;margin:14px 0 6px;font-weight:600;font-size:14px}
+.collapse{padding:8px 0 4px 14px;border-left:2px solid var(--line);margin:6px 0 4px 5px}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:8px}
+details summary{outline:none;cursor:pointer;color:var(--muted)}
 </style></head><body>
-<header class=topbar><div class=brand><svg class=logo width=28 height=28 viewBox="0 0 48 48" fill=none><path d="M24 3 41 9 41 24 C41 35 33 42 24 45 C15 42 7 35 7 24 L7 9 Z" fill="#161b24" stroke="#ff5a3c" stroke-width="2.6"/><path d="M20 16 33 24 20 32 Z" fill="#ff5a3c"/></svg> Aegis Clipper — Setup</div></header>
+<header class=topbar>
+  <div class=brand><svg class=logo width=28 height=28 viewBox="0 0 48 48" fill=none><path d="M24 3 41 9 41 24 C41 35 33 42 24 45 C15 42 7 35 7 24 L7 9 Z" fill="#161b24" stroke="#ff5a3c" stroke-width="2.6"/><path d="M20 16 33 24 20 32 Z" fill="#ff5a3c"/></svg> Settings</div>
+  <button class=primary onclick=finish() style=margin-left:auto>Done</button>
+  <button class=btn-icon title="Save &amp; close" onclick=finish()><svg class=ico viewBox="0 0 24 24"><line x1=18 y1=6 x2=6 y2=18/><line x1=6 y1=6 x2=18 y2=18/></svg></button>
+</header>
 <main><div class=wizard>
 
   <div class=step>
