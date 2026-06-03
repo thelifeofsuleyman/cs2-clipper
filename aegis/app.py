@@ -80,11 +80,36 @@ def _open_folder(p) -> None:
         log(f"Could not open folder: {e}")
 
 
-# ───────── UI: native window with close-to-tray ─────────
-def _run_window(cfg, port: int, landing: str) -> bool:
-    """Show the dashboard in a true native window via pywebview. Returns False
-    (logging the reason) if pywebview can't import OR can't start, so the caller
-    falls back to an app-mode browser window."""
+# ───────── UI: native window with native-titlebar behavior ─────────
+class _WindowApi:
+    """Exposed to the page's JS as window.pywebview.api so the in-page close
+    dialog can drive the NATIVE window: background (hide, reopen from tray) or
+    quit (stop engine + exit)."""
+    def __init__(self, engine):
+        self.engine = engine
+        self.window = None
+
+    def background(self):
+        try:
+            self.window.hide()
+            log("Hidden to background — engine still clipping; reopen from the tray.")
+        except Exception:
+            pass
+
+    def quit(self):
+        try:
+            self.engine.stop_recording()
+        except Exception:
+            pass
+        import os
+        os._exit(0)
+
+
+def _run_window(cfg, engine, port: int, landing: str) -> bool:
+    """Show the dashboard in a TRUE native window via pywebview, with native
+    title-bar behavior: minimize -> background (engine keeps running), and the
+    native X -> the in-page "background or quit" dialog. Returns False (logging
+    why) if pywebview can't load, so the caller falls back to an app-mode window."""
     try:
         import webview
     except Exception as e:
@@ -93,21 +118,21 @@ def _run_window(cfg, port: int, landing: str) -> bool:
 
     url = f"http://127.0.0.1:{port}{landing}"
     try:
+        api = _WindowApi(engine)
         window = webview.create_window(
-            APP_NAME, url, width=WINDOW_W, height=WINDOW_H, min_size=(900, 600),
+            APP_NAME, url, js_api=api, width=WINDOW_W, height=WINDOW_H,
+            min_size=(900, 600),
         )
-        tray = _start_tray_for_window(window, cfg, port)
+        api.window = window
+        _start_tray_for_window(window, cfg, port)
 
-        # Closing hides to the tray (engine keeps clipping); no tray -> real close.
+        # Native X: don't close — show the in-page choice dialog and cancel.
         def _on_closing():
-            if tray is None:
-                return True
             try:
-                window.hide()
+                window.evaluate_js("window.__exitChoice && window.__exitChoice()")
+                return False   # cancel the native close; the dialog decides
             except Exception:
-                return True
-            log("Window hidden to tray — still clipping. Use the tray to reopen or quit.")
-            return False
+                return True    # if we can't show the dialog, allow a normal close
 
         try:
             window.events.closing += _on_closing
@@ -318,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     # Prefer a true native window (pywebview). If that can't load, open a
     # chromeless app-mode browser window (still looks like an app); only as a
     # last resort use a normal browser tab. A tray icon runs alongside either way.
-    if not _run_window(cfg, port, landing):
+    if not _run_window(cfg, engine, port, landing):
         url = f"http://127.0.0.1:{port}{landing}"
         if not _open_app_mode(url):
             threading.Timer(1.0, lambda: webbrowser.open(url)).start()

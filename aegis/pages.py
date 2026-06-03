@@ -142,7 +142,6 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <header class=topbar>
   <div class=brand><svg class=logo width=28 height=28 viewBox="0 0 48 48" fill=none><path d="M24 3 41 9 41 24 C41 35 33 42 24 45 C15 42 7 35 7 24 L7 9 Z" fill="#161b24" stroke="#ff5a3c" stroke-width="2.6"/><path d="M20 16 33 24 20 32 Z" fill="#ff5a3c"/></svg> Aegis Clipper</div>
   <div class=pills id=pills></div>
-  <button class=btn-icon id=exitBtn title="Minimize or quit" style=margin-left:4px><svg class=ico viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1=21 y1=12 x2=9 y2=12/></svg></button>
 </header>
 <main>
   <div id=updateBanner style="display:none;flex-wrap:wrap;align-items:center;gap:12px;background:#1a2433;
@@ -404,12 +403,27 @@ function pollUpdate(){
   },600);
 }
 
-// ----- close: background vs quit -----
-$('#exitBtn').onclick=()=>$('#exitDialog').classList.add('show');
+// ----- native X -> "background or quit" dialog -----
+// pywebview's native title-bar X calls window.__exitChoice (see app.py); the
+// dialog buttons then drive the native window via window.pywebview.api.
+function showExit(){$('#exitDialog').classList.add('show');}
+window.__exitChoice=showExit;
+const nativeApi=()=>(window.pywebview&&window.pywebview.api)||null;
 $('#exitCancel').onclick=()=>$('#exitDialog').classList.remove('show');
 $('#exitDialog').onclick=e=>{if(e.target===$('#exitDialog'))$('#exitDialog').classList.remove('show');};
-$('#bgBtn').onclick=()=>{$('#exitDialog').classList.remove('show');toast('Running in the background — reopen any time from the tray icon.');try{window.close();}catch(e){}};
-$('#quitBtn').onclick=async()=>{$('#quitBtn').textContent='Quitting…';try{await api('/api/quit',{method:'POST'});}catch(e){}setTimeout(()=>{try{window.close();}catch(e){}},500);};
+$('#bgBtn').onclick=()=>{
+  $('#exitDialog').classList.remove('show');
+  const a=nativeApi();
+  if(a){a.background();}
+  else{toast('Running in the background — reopen from the tray icon.');try{window.close();}catch(e){}}
+};
+$('#quitBtn').onclick=async()=>{
+  $('#quitBtn').textContent='Quitting…';
+  const a=nativeApi();
+  if(a){a.quit();return;}
+  try{await api('/api/quit',{method:'POST'});}catch(e){}
+  setTimeout(()=>{try{window.close();}catch(e){}},500);
+};
 
 $('#checkUpd').onclick=async()=>{
   const s=$('#updStatus');s.textContent='Checking…';
