@@ -195,6 +195,11 @@ def _startup_cleanup() -> None:
             shutil.rmtree(d, ignore_errors=True)
     except Exception:
         pass
+    try:  # half-written capture temps from a crash mid-save
+        for tmp in paths.clips_dir().glob(".raw_*.mp4"):
+            tmp.unlink()
+    except Exception:
+        pass
     try:
         leftover = Path(tempfile.gettempdir()) / "AegisClipper-Setup.exe"
         if leftover.exists():

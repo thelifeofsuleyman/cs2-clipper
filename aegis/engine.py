@@ -17,6 +17,8 @@ state without firing a stray clip.
 """
 from __future__ import annotations
 
+import re
+import shutil
 import threading
 import time
 import uuid
@@ -29,6 +31,15 @@ from .log import log
 from .recorder import make_recorder
 
 KILL_LABELS = {1: "Kill", 2: "Double tap", 3: "TRIPLE", 4: "QUAD", 5: "ACE"}
+
+
+def kill_basename(map_name: str, kills: int) -> str:
+    """A human, sortable filename stem like 'mirage_4K' / 'dust2_1K' / 'inferno_ACE'
+    so clips are identifiable on disk by map + kill count."""
+    m = re.sub(r"^(de|cs|ar|dz|gd)_", "", (map_name or "clip").lower())
+    m = re.sub(r"[^a-z0-9]+", "", m) or "clip"
+    label = "ACE" if kills >= 5 else f"{kills}K"
+    return f"{m}_{label}"
 
 
 def format_caption(kills: int, map_name: str, round_n: int, side: str) -> str:
@@ -151,9 +162,9 @@ class Engine:
             return
 
         log(f"Saving clip for {kills} kill(s)")
-        out = paths.clips_dir() / f"clip_{int(time.time())}_{uuid.uuid4().hex[:6]}.mp4"
+        raw_tmp = paths.clips_dir() / f".raw_{uuid.uuid4().hex[:8]}.mp4"
         clip_seconds = float(self.cfg.get("recording.clip_seconds", 30))
-        clip_path = self.recorder.save(clip_seconds, out)
+        clip_path = self.recorder.save(clip_seconds, raw_tmp)
         if clip_path is None:
             log("Recorder produced no clip — keeping the streak to retry on the next kill")
             return                                # keep pending_kills intact
@@ -161,12 +172,12 @@ class Engine:
         self._consume_pending(kills)             # success: deduct what we clipped
 
         # Produce a share-ready version (intro card + fades); fall back to raw.
-        final = clip_path
+        produced = clip_path
         try:
             polished = polish.polish_clip(self.cfg, clip_path, kills, map_name,
                                           steam_name, steam_id)
             if polished is not None:
-                final = polished
+                produced = polished
                 try:
                     clip_path.unlink()           # drop the raw once we have the polished one
                 except Exception:
@@ -174,9 +185,27 @@ class Engine:
         except Exception as e:
             log(f"Polish step errored, keeping raw clip: {e}")
 
+        # Give it a human filename: <map>_<kills>  e.g. mirage_4K, inferno_ACE
+        final = self._finalize_clip(produced, map_name, kills)
         clip = self._catalog_clip(final, kills, map_name, round_n, side)
         caption = format_caption(kills, map_name, round_n, side)
         self.fan_out(clip, caption)
+
+    def _finalize_clip(self, src: Path, map_name: str, kills: int) -> Path:
+        """Move the produced clip to a unique '<map>_<kills>.mp4' name."""
+        base = kill_basename(map_name, kills)
+        d = paths.clips_dir()
+        dest = d / f"{base}.mp4"
+        n = 2
+        while dest.exists():
+            dest = d / f"{base}_{n}.mp4"
+            n += 1
+        try:
+            shutil.move(str(src), str(dest))     # handles cross-volume (OBS dir)
+            return dest
+        except Exception as e:
+            log(f"Could not rename clip to {dest.name}: {e}")
+            return src
 
     def _consume_pending(self, kills: int) -> None:
         with self._lock:

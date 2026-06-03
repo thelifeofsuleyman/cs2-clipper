@@ -127,6 +127,27 @@ def test_recorder_save_after_stop_is_graceful(cfg, tmp_path):
     assert r.save(30, tmp_path / "o.mp4") is None
 
 
+def test_kill_basename_convention():
+    from aegis.engine import kill_basename
+    assert kill_basename("de_mirage", 4) == "mirage_4K"
+    assert kill_basename("de_dust2", 1) == "dust2_1K"
+    assert kill_basename("de_inferno", 5) == "inferno_ACE"
+    assert kill_basename("cs_office", 2) == "office_2K"
+    assert kill_basename("", 3) == "clip_3K"        # missing map -> safe default
+
+
+def test_finalize_clip_gives_clean_unique_name(cfg, data_dir):
+    from aegis.clips import Catalog
+    from aegis.engine import Engine
+    eng = Engine(cfg, Catalog())
+    src1 = paths.clips_dir() / ".raw_aaa.mp4"; src1.write_bytes(b"x")
+    p1 = eng._finalize_clip(src1, "de_mirage", 4)
+    assert p1.name == "mirage_4K.mp4" and p1.exists() and not src1.exists()
+    src2 = paths.clips_dir() / ".raw_bbb.mp4"; src2.write_bytes(b"y")
+    p2 = eng._finalize_clip(src2, "de_mirage", 4)
+    assert p2.name == "mirage_4K_2.mp4"             # collision gets a suffix
+
+
 def test_resolve_ffmpeg_finds_bundled_in_meipass(tmp_path, monkeypatch):
     """The frozen-build regression: ffmpeg lands in _internal (sys._MEIPASS), not
     next to the .exe. resolve_ffmpeg must look there."""
