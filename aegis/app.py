@@ -82,39 +82,67 @@ def _open_folder(p) -> None:
 
 # ───────── UI: native window with close-to-tray ─────────
 def _run_window(cfg, port: int, landing: str) -> bool:
-    """Show the dashboard in a native window. Returns False if pywebview is
-    unavailable so the caller can fall back to the browser+tray path."""
+    """Show the dashboard in a true native window via pywebview. Returns False
+    (logging the reason) if pywebview can't import OR can't start, so the caller
+    falls back to an app-mode browser window."""
     try:
         import webview
-    except ImportError:
+    except Exception as e:
+        log(f"Native window unavailable (pywebview import failed: {e}); using app-mode window")
         return False
 
     url = f"http://127.0.0.1:{port}{landing}"
-    window = webview.create_window(
-        APP_NAME, url, width=WINDOW_W, height=WINDOW_H, min_size=(900, 600),
-    )
-
-    tray = _start_tray_for_window(window, cfg, port)
-
-    # Closing the window hides it to the tray instead of quitting, so the engine
-    # keeps clipping during a match. If there's no tray, let the close go through.
-    def _on_closing():
-        if tray is None:
-            return True
-        try:
-            window.hide()
-        except Exception:
-            return True
-        log("Window hidden to tray — still clipping. Use the tray to reopen or quit.")
-        return False  # cancel the close
-
     try:
-        window.events.closing += _on_closing
-    except Exception:
-        pass  # older pywebview: window simply closes (engine stops) — acceptable
+        window = webview.create_window(
+            APP_NAME, url, width=WINDOW_W, height=WINDOW_H, min_size=(900, 600),
+        )
+        tray = _start_tray_for_window(window, cfg, port)
 
-    webview.start()  # blocks the main thread until the app really exits
-    return True
+        # Closing hides to the tray (engine keeps clipping); no tray -> real close.
+        def _on_closing():
+            if tray is None:
+                return True
+            try:
+                window.hide()
+            except Exception:
+                return True
+            log("Window hidden to tray — still clipping. Use the tray to reopen or quit.")
+            return False
+
+        try:
+            window.events.closing += _on_closing
+        except Exception:
+            pass
+
+        webview.start()  # blocks until the app exits
+        return True
+    except Exception as e:
+        log(f"Native window failed to start ({e}); using app-mode window")
+        return False
+
+
+def _open_app_mode(url: str) -> bool:
+    """Open the dashboard in a chromeless browser window (--app mode) so it looks
+    like a real app (no tabs/address bar). Edge ships with Windows, so this is a
+    reliable native-window substitute when pywebview can't load."""
+    import os
+    import subprocess
+    candidates = [
+        os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%LocalAppData%\Programs\BraveSoftware\Brave-Browser\Application\brave.exe"),
+    ]
+    for exe in candidates:
+        try:
+            if exe and os.path.exists(exe):
+                subprocess.Popen([exe, f"--app={url}", "--window-size=1180,840"])
+                log(f"Opened app window via {os.path.basename(exe)} (--app mode)")
+                return True
+        except Exception as e:
+            log(f"app-mode launch failed for {exe}: {e}")
+    return False
 
 
 def _start_tray_for_window(window, cfg, port: int):
@@ -255,9 +283,13 @@ def main(argv: list[str] | None = None) -> int:
         engine.stop_recording()
         return 0
 
-    # Prefer a native window; fall back to tray + browser if pywebview is absent.
+    # Prefer a true native window (pywebview). If that can't load, open a
+    # chromeless app-mode browser window (still looks like an app); only as a
+    # last resort use a normal browser tab. A tray icon runs alongside either way.
     if not _run_window(cfg, port, landing):
-        threading.Timer(1.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}{landing}")).start()
+        url = f"http://127.0.0.1:{port}{landing}"
+        if not _open_app_mode(url):
+            threading.Timer(1.0, lambda: webbrowser.open(url)).start()
         _run_tray_browser(cfg, port)
     engine.stop_recording()
     return 0

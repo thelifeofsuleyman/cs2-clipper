@@ -56,6 +56,16 @@ for pkg in ("clr_loader", "pythonnet", "PIL"):
     except Exception:
         pass
 
+# pywebview chooses its Windows GUI backend dynamically; name them so they're
+# bundled. If the native window still can't load, the app falls back to a
+# chromeless Edge/Chrome --app window, so this is best-effort.
+hidden += [
+    "clr",
+    "webview.platforms.edgechromium",
+    "webview.platforms.winforms",
+    "webview.platforms.mshtml",
+]
+
 # Embed Windows version metadata (CompanyName/ProductName/version). An exe with
 # no version resource looks more suspicious to antivirus heuristics and shows
 # "Unknown publisher"; real metadata is basic hygiene. (It does NOT replace code
