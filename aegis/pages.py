@@ -6,84 +6,112 @@ The pages are static shells; all data flows through the JSON API in web.py.
 
 _BASE_CSS = """
 :root{
-  --bg:#0d1017; --panel:#161b24; --panel2:#1e2530; --line:#2a323f;
-  --txt:#e6ebf2; --muted:#8b97a8; --accent:#ff5a3c; --accent2:#3ca0ff;
-  --ok:#37d67a; --warn:#ffb020; --err:#ff5470;
+  --bg:#0a0c10; --panel:#13161c; --panel2:#191d25; --line:#242932; --line2:#323945;
+  --txt:#e8ebf1; --muted:#8d96a5; --faint:#5f6776;
+  --accent:#ff5a39; --accent2:#4c9ffe; --ok:#37d67a; --warn:#f5b13d; --err:#ff5a6a;
+  --r:10px; --r2:14px; --shadow:0 10px 30px rgba(0,0,0,.45);
 }
 *{box-sizing:border-box}
-body{margin:0;font:14px/1.55 'Segoe UI',system-ui,sans-serif;color:var(--txt);
-  background:radial-gradient(1100px 560px at 50% -12%, #151c29 0%, var(--bg) 62%) fixed}
+html{color-scheme:dark}
+body{margin:0;color:var(--txt);background:var(--bg);
+  font:14px/1.55 'Segoe UI Variable Text','Segoe UI',system-ui,-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  background-image:radial-gradient(1000px 420px at 50% -260px,rgba(255,90,57,.06),transparent)}
 a{color:var(--accent2);text-decoration:none}
-button{font:inherit;cursor:pointer;border:none;border-radius:9px;padding:8px 14px;
-  background:var(--panel2);color:var(--txt);transition:.15s}
-button:hover{background:#2a323f}
-button.primary{background:linear-gradient(135deg,#ff6a3c,#ff4d6d);color:#fff;font-weight:600;
-  box-shadow:0 6px 18px rgba(255,77,109,.25)}
-button.primary:hover{filter:brightness(1.07)}
-.brand .logo{filter:drop-shadow(0 0 7px rgba(255,90,60,.45))}
-button.ghost{background:transparent;border:1px solid var(--line)}
-input,select{font:inherit;background:var(--panel2);border:1px solid var(--line);
-  color:var(--txt);border-radius:8px;padding:9px 11px;width:100%}
-header.topbar{display:flex;align-items:center;gap:16px;padding:14px 24px;
-  background:rgba(22,27,36,.82);backdrop-filter:blur(8px);
+.ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);border-radius:var(--r);
+  padding:9px 14px;background:var(--panel2);color:var(--txt);font-weight:500;
+  display:inline-flex;align-items:center;gap:8px;transition:.14s}
+button:hover{background:#20252e;border-color:var(--line2)}
+button:active{transform:translateY(1px)}
+button:disabled{opacity:.5;cursor:default}
+button.primary{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
+button.primary:hover{background:#ff6c4e}
+button.ghost{background:transparent}
+.btn-icon{width:34px;height:34px;padding:0;justify-content:center;color:var(--muted)}
+.btn-icon:hover{color:var(--txt)}
+.btn-icon.danger:hover{color:var(--err);border-color:var(--err)}
+input,select{font:inherit;background:#0f1218;border:1px solid var(--line);color:var(--txt);
+  border-radius:var(--r);padding:10px 12px;width:100%;transition:.14s}
+input:focus,select:focus{outline:none;border-color:var(--accent2);box-shadow:0 0 0 3px rgba(76,159,254,.16)}
+header.topbar{display:flex;align-items:center;gap:16px;padding:13px 24px;
+  background:rgba(13,16,21,.72);backdrop-filter:blur(14px) saturate(140%);
   border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
-.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px}
-.brand .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+.brand{display:flex;align-items:center;gap:11px;font-weight:650;font-size:15px;letter-spacing:.2px}
+.brand .logo{filter:drop-shadow(0 1px 5px rgba(255,90,57,.35))}
 .pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
-.pill{display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);
-  padding:5px 10px;border-radius:20px;font-size:12px;color:var(--muted)}
-.pill b{color:var(--txt)}
-.pill .led{width:8px;height:8px;border-radius:50%;background:var(--muted)}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-.pill .led.on{background:var(--ok);box-shadow:0 0 8px var(--ok);animation:pulse 1.6s infinite}
+.pill{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);
+  padding:6px 11px;border-radius:9px;font-size:12px;color:var(--muted)}
+.pill b{color:var(--txt);font-weight:600}
+.pill .led{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.pill .led.on{background:var(--ok);box-shadow:0 0 0 3px rgba(55,214,122,.18);animation:pulse 1.8s infinite}
 .pill .led.off{background:var(--err)}
-.appfoot{max-width:1200px;margin:0 auto;padding:18px 24px 32px;color:var(--muted);
-  font-size:12px;display:flex;gap:14px;align-items:center;border-top:1px solid var(--line)}
+.appfoot{max-width:1180px;margin:28px auto 0;padding:16px 24px 34px;color:var(--faint);
+  font-size:12px;display:flex;gap:16px;align-items:center;border-top:1px solid var(--line)}
 .appfoot a{color:var(--muted)}.appfoot a:hover{color:var(--txt)}
-main{max-width:1200px;margin:0 auto;padding:24px}
-.tabs{display:flex;gap:6px;margin-bottom:20px}
-.tabs button{background:transparent;color:var(--muted);border-radius:0;border-bottom:2px solid transparent;padding:8px 14px}
+main{max-width:1180px;margin:0 auto;padding:26px 24px}
+.tabs{display:flex;gap:4px;margin-bottom:22px;border-bottom:1px solid var(--line)}
+.tabs button{background:transparent;border:none;color:var(--muted);border-radius:0;padding:10px 14px;
+  border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:500}
+.tabs button:hover{color:var(--txt);background:transparent}
 .tabs button.active{color:var(--txt);border-bottom-color:var(--accent)}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:18px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;
-  display:flex;flex-direction:column;transition:transform .15s,box-shadow .15s,border-color .15s}
-.card:hover{transform:translateY(-3px);box-shadow:0 12px 30px rgba(0,0,0,.38);border-color:#33414f}
-.card .thumb{position:relative;aspect-ratio:16/9;background:#000;cursor:pointer;overflow:hidden}
-.card .thumb img{width:100%;height:100%;object-fit:cover}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r2);overflow:hidden;
+  display:flex;flex-direction:column;transition:transform .16s,box-shadow .16s,border-color .16s}
+.card:hover{transform:translateY(-2px);box-shadow:var(--shadow);border-color:var(--line2)}
+.card .thumb{position:relative;aspect-ratio:16/9;background:#05070a;cursor:pointer;overflow:hidden}
+.card .thumb img{width:100%;height:100%;object-fit:cover;transition:.25s}
+.card:hover .thumb img{transform:scale(1.04)}
 .card .thumb .play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  font-size:34px;color:#fff;opacity:0;transition:.15s;background:rgba(0,0,0,.25)}
+  opacity:0;transition:.16s;background:linear-gradient(transparent,rgba(0,0,0,.25))}
 .card .thumb:hover .play{opacity:1}
-.badge{position:absolute;top:8px;left:8px;background:var(--accent);color:#fff;font-weight:700;
-  font-size:12px;padding:3px 8px;border-radius:6px}
-.badge.dur{left:auto;right:8px;background:rgba(0,0,0,.7);font-weight:500}
-.card .body{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
-.card .title{font-weight:600;outline:none}
-.card .title[contenteditable]:focus{border-bottom:1px dashed var(--accent2)}
-.meta{font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
+.play .pbtn{width:46px;height:46px;border-radius:50%;background:rgba(10,12,16,.6);
+  backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.25);display:grid;place-items:center}
+.play .ico{width:20px;height:20px;fill:#fff;stroke:none;margin-left:2px}
+.badge{position:absolute;top:9px;left:9px;background:var(--accent);color:#fff;font-weight:700;
+  font-size:11px;letter-spacing:.3px;padding:3px 8px;border-radius:7px}
+.badge.dur{left:auto;right:9px;background:rgba(5,7,10,.78);font-weight:600;color:#d7dce4}
+.card .body{padding:13px 14px;display:flex;flex-direction:column;gap:9px}
+.card .title{font-weight:600;font-size:14px;outline:none;border-radius:6px;line-height:1.35}
+.card .title[contenteditable]:focus{box-shadow:0 0 0 2px var(--accent2);padding:1px 4px;margin:-1px -4px}
+.meta{font-size:12px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.meta .sep{width:3px;height:3px;border-radius:50%;background:var(--faint)}
 .targets{display:flex;gap:6px;flex-wrap:wrap}
-.tg{font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--line);color:var(--muted)}
-.tg.ok{color:var(--ok);border-color:var(--ok)}
-.tg.err{color:var(--err);border-color:var(--err)}
-.card .actions{display:flex;gap:6px;margin-top:2px}
-.card .actions button{padding:6px 9px;font-size:13px;flex:1}
-.fav{color:var(--muted)}.fav.on{color:var(--warn)}
-.empty{grid-column:1/-1;text-align:center;color:var(--muted);padding:60px 20px;
-  min-height:46vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.logbox{background:#0a0d12;border:1px solid var(--line);border-radius:12px;padding:14px;
-  font-family:Consolas,monospace;font-size:12.5px;height:60vh;overflow:auto;white-space:pre-wrap}
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;
-  justify-content:center;z-index:50;padding:24px}
+.tg{font-size:11px;padding:3px 8px 3px 7px;border-radius:20px;border:1px solid var(--line);
+  color:var(--muted);display:inline-flex;align-items:center;gap:5px}
+.tg::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--faint)}
+.tg.ok{color:var(--ok)}.tg.ok::before{background:var(--ok)}
+.tg.err{color:var(--err)}.tg.err::before{background:var(--err)}
+.card .actions{display:flex;gap:7px;align-items:center;margin-top:2px}
+.card .actions .spacer{flex:1}
+.fav{color:var(--muted)}.fav.on{color:var(--warn)}.fav.on .ico{fill:var(--warn)}
+.empty{grid-column:1/-1;text-align:center;color:var(--muted);padding:48px 20px;
+  min-height:48vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
+.empty .ico{width:46px;height:46px;stroke:var(--faint);margin-bottom:8px}
+.empty .sub{font-size:12.5px;color:var(--faint);max-width:380px}
+.logbox{background:#07090d;border:1px solid var(--line);border-radius:var(--r2);padding:16px 18px;
+  font-family:'Cascadia Mono',Consolas,monospace;font-size:12.5px;line-height:1.7;color:#b8c0cc;
+  height:62vh;overflow:auto;white-space:pre-wrap}
+.modal{position:fixed;inset:0;background:rgba(5,7,10,.85);backdrop-filter:blur(6px);display:none;
+  align-items:center;justify-content:center;z-index:50;padding:30px}
 .modal.show{display:flex}
-.modal video{max-width:90vw;max-height:80vh;border-radius:12px;background:#000}
-.modal .close{position:absolute;top:18px;right:24px;font-size:30px;color:#fff;cursor:pointer}
-.bar{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+.modal video{max-width:92vw;max-height:82vh;border-radius:var(--r2);background:#000;box-shadow:var(--shadow)}
+.modal .close{position:absolute;top:18px;right:22px;width:40px;height:40px;border-radius:50%;
+  background:rgba(255,255,255,.08);border:none;color:#fff;display:grid;place-items:center;cursor:pointer}
+.modal .close:hover{background:rgba(255,255,255,.16)}
+.bar{display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap}
 .bar .sel{color:var(--muted);font-size:13px}
-.card.sel{outline:2px solid var(--accent2)}
-.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel2);
-  border:1px solid var(--line);padding:12px 18px;border-radius:10px;z-index:60;opacity:0;transition:.3s}
-.toast.show{opacity:1}
-.check{position:absolute;top:8px;right:8px;width:22px;height:22px;border-radius:6px;
-  border:2px solid #fff;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center}
+.card.sel{outline:2px solid var(--accent2);outline-offset:-2px}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(8px);
+  background:var(--panel2);border:1px solid var(--line2);padding:12px 18px;border-radius:var(--r);
+  box-shadow:var(--shadow);z-index:60;opacity:0;transition:.25s;font-size:13px}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.check{position:absolute;top:9px;right:9px;width:24px;height:24px;border-radius:7px;
+  border:2px solid rgba(255,255,255,.7);background:rgba(5,7,10,.5);display:none;
+  align-items:center;justify-content:center;color:#fff}
+.check .ico{width:14px;height:14px}
 .selmode .check{display:flex}
 .card.sel .check{background:var(--accent2);border-color:var(--accent2)}
 """
@@ -98,7 +126,7 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <main>
   <div id=updateBanner style="display:none;flex-wrap:wrap;align-items:center;gap:12px;background:#1a2433;
     border:1px solid var(--accent2);border-radius:12px;padding:12px 16px;margin-bottom:18px">
-    <span style="font-size:18px">⬆️</span>
+    <svg class=ico viewBox="0 0 24 24" style="color:var(--accent2);width:20px;height:20px"><line x1=12 y1=19 x2=12 y2=5/><polyline points="5 12 12 5 19 12"/></svg>
     <div style="flex:1;min-width:200px"><b id=upVer></b> is available <span id=upNotes style="color:var(--muted)"></span></div>
     <button class=primary id=upBtn>Update now</button>
     <button class=ghost id=upDismiss>Later</button>
@@ -110,14 +138,14 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
     <button class=active data-tab=clips>Clips</button>
     <button data-tab=montages>Montages</button>
     <button data-tab=logs>Activity</button>
-    <a href="/setup" style="margin-left:auto"><button class=ghost>⚙ Settings</button></a>
+    <a href="/setup" style="margin-left:auto"><button class=ghost><svg class=ico viewBox="0 0 24 24"><line x1=4 y1=21 x2=4 y2=14/><line x1=4 y1=10 x2=4 y2=3/><line x1=12 y1=21 x2=12 y2=12/><line x1=12 y1=8 x2=12 y2=3/><line x1=20 y1=21 x2=20 y2=16/><line x1=20 y1=12 x2=20 y2=3/><line x1=1 y1=14 x2=7 y2=14/><line x1=9 y1=8 x2=15 y2=8/><line x1=17 y1=16 x2=23 y2=16/></svg> Settings</button></a>
   </div>
 
   <section data-panel=clips>
     <div class=bar>
-      <button class=ghost id=selBtn>Select for montage</button>
+      <button class=ghost id=selBtn><svg class=ico viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg> Select clips</button>
       <span class=sel id=selInfo style=display:none></span>
-      <button class=primary id=makeMontage style="display:none">🎬 Build montage</button>
+      <button class=primary id=makeMontage style="display:none"><svg class=ico viewBox="0 0 24 24"><rect x=2 y=2 width=20 height=20 rx=2.5/><line x1=7 y1=2 x2=7 y2=22/><line x1=17 y1=2 x2=17 y2=22/><line x1=2 y1=12 x2=22 y2=12/></svg> Build montage</button>
       <button class=ghost id=cancelSel style=display:none>Cancel</button>
       <span class=sel id=clipCount style=margin-left:auto></span>
     </div>
@@ -139,12 +167,25 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   <span id=footStatus style=margin-left:auto></span>
 </footer>
 
-<div class=modal id=modal><span class=close id=modalClose>×</span><video id=player controls></video></div>
+<div class=modal id=modal><button class=close id=modalClose><svg class=ico viewBox="0 0 24 24"><line x1=18 y1=6 x2=6 y2=18/><line x1=6 y1=6 x2=18 y2=18/></svg></button><video id=player controls></video></div>
 <div class=toast id=toast></div>
 
 <script>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let selMode=false, selected=new Set();
+const ICONS={
+  play:'<polygon points="6 4 20 12 6 20"></polygon>',
+  star:'<polygon points="12 2 15.1 8.3 22 9.3 17 14.1 18.2 21 12 17.8 5.8 21 7 14.1 2 9.3 8.9 8.3 12 2"></polygon>',
+  share:'<circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"></line><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"></line>',
+  trash:'<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>',
+  film:'<rect x="2" y="2" width="20" height="20" rx="2.5"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line>',
+  settings:'<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>',
+  x:'<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>',
+  layers:'<polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline>',
+  check:'<polyline points="20 6 9 17 4 12"></polyline>'
+};
+const ic=n=>`<svg class=ico viewBox="0 0 24 24">${ICONS[n]||''}</svg>`;
+const PLAY=`<div class=play><div class=pbtn>${ic('play')}</div></div>`;
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
 async function api(u,o){try{const r=await fetch(u,o);if(!r.ok)return null;return await r.json();}catch(e){return null;}}
 
@@ -180,27 +221,31 @@ async function loadClips(){
   const clips=(r&&r.clips)||[];
   const g=$('#clipGrid');
   $('#clipCount').textContent=clips.length?`${clips.length} clip${clips.length===1?'':'s'}`:'';
-  if(!clips.length){g.innerHTML='<div class=empty><div style="font-size:42px;margin-bottom:8px">🎬</div>No clips yet. Hop into CS2 and get a kill — your highlights show up here automatically.<br><span style="font-size:12px">Tip: use “Send a test clip” in Settings to check your setup now.</span></div>';return;}
-  g.innerHTML=clips.map(c=>`
+  if(!clips.length){g.innerHTML=`<div class=empty>${ic('film')}<div style="font-size:15px;color:var(--txt);font-weight:600">No clips yet</div><div class=sub>Hop into CS2 and get a kill — your highlights show up here automatically. Or use “Preview a clip” in Settings to test now.</div></div>`;updateSelBar();return;}
+  g.innerHTML=clips.map(c=>{
+    const kb=c.kills>=5?'ACE':(c.kills?c.kills+'K':'');
+    const targets=Object.entries(c.uploads||{}).map(([k,v])=>`<span class="tg ${tgClass(v)}" title="${esc(v)}">${esc(k)}</span>`).join('')||'<span class=tg>not shared</span>';
+    return `
     <div class="card ${selected.has(c.id)?'sel':''}" data-id="${c.id}">
-      <div class=check>✓</div>
+      <div class=check>${ic('check')}</div>
       <div class=thumb data-play="${c.id}">
         <img src="/clip/${c.id}/thumb" loading=lazy>
-        <span class=badge>${c.kills}K</span>
+        ${kb?`<span class=badge>${kb}</span>`:''}
         ${c.duration?`<span class="badge dur">${Math.round(c.duration)}s</span>`:''}
-        <div class=play>▶</div>
+        ${PLAY}
       </div>
       <div class=body>
-        <div class=title contenteditable data-edit="${c.id}">${esc(c.title||'Untitled')}</div>
-        <div class=meta><span>${esc(c.map)}</span>${c.round?`<span>round ${c.round} · ${esc(c.side)}</span>`:''}<span>${c.size_mb} MB</span></div>
-        <div class=targets>${Object.entries(c.uploads||{}).map(([k,v])=>`<span class="tg ${tgClass(v)}" title="${esc(v)}">${k}</span>`).join('')||'<span class=tg>not shared</span>'}</div>
+        <div class=title contenteditable=plaintext-only data-edit="${c.id}">${esc(c.title||'Untitled')}</div>
+        <div class=meta><span>${esc(c.map)}</span><span class=sep></span><span>${c.size_mb} MB</span>${c.duration?`<span class=sep></span><span>${Math.round(c.duration)}s</span>`:''}</div>
+        <div class=targets>${targets}</div>
         <div class=actions>
-          <button class="fav ${c.favorite?'on':''}" data-fav="${c.id}">★</button>
-          <button data-share="${c.id}">Share</button>
-          <button data-del="${c.id}">🗑</button>
+          <button class="btn-icon fav ${c.favorite?'on':''}" data-fav="${c.id}" title="Favorite">${ic('star')}</button>
+          <span class=spacer></span>
+          <button class="btn-icon" data-share="${c.id}" title="Share">${ic('share')}</button>
+          <button class="btn-icon danger" data-del="${c.id}" title="Delete">${ic('trash')}</button>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;}).join('');
   bindCards();
   updateSelBar();   // keep the montage bar in sync after a re-render
 }
@@ -250,14 +295,14 @@ $('#makeMontage').onclick=async()=>{
       body:JSON.stringify({clip_ids:[...selected]})});
     if(r&&r.ok){toast('Montage ready!');$('#cancelSel').click();}
     else{toast((r&&r.error)||'Montage failed');}
-  }finally{btn.disabled=false;btn.textContent='🎬 Build montage';}
+  }finally{btn.disabled=false;btn.innerHTML=ic('film')+' Build montage';}
 };
 
 // ----- montages -----
 async function loadMontages(){
   const mr=await api('/api/montages');const montages=(mr&&mr.montages)||[];const g=$('#montGrid');
-  if(!montages.length){g.innerHTML='<div class=empty>No montages yet. Select clips on the Clips tab and hit “Build montage”.</div>';return;}
-  g.innerHTML=montages.map(m=>`<div class=card><div class=thumb data-mp="${esc(m)}"><div class=play>▶</div></div>
+  if(!montages.length){g.innerHTML=`<div class=empty>${ic('layers')}<div style="font-size:15px;color:var(--txt);font-weight:600">No montages yet</div><div class=sub>Select clips on the Clips tab and hit “Build montage”.</div></div>`;return;}
+  g.innerHTML=montages.map(m=>`<div class=card><div class=thumb data-mp="${esc(m)}">${PLAY}</div>
     <div class=body><div class=title>${esc(m)}</div></div></div>`).join('');
   $$('[data-mp]').forEach(el=>el.onclick=()=>{$('#player').src='/montage/'+encodeURIComponent(el.dataset.mp);
     $('#modal').classList.add('show');$('#player').play().catch(()=>{});});
@@ -420,8 +465,8 @@ SETUP_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
     </div>
 
     <div class=foot style="margin-top:16px;flex-wrap:wrap;gap:10px">
-      <button class=ghost onclick=testClip()>🎬 Preview a clip (with ACE intro)</button>
-      <button class=ghost onclick=captureTest()>🖥️ Test screen capture</button>
+      <button class=ghost onclick=testClip()>Preview a clip</button>
+      <button class=ghost onclick=captureTest()>Test screen capture</button>
       <span class=statusline id=testOut></span>
     </div>
   </div>
