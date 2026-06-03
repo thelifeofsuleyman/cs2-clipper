@@ -92,6 +92,20 @@ jobs:
             packaging/Output/AegisClipper-portable.zip
           generate_release_notes: true
 
+      - name: Prune old releases (keep newest 4)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release list -R "$REPO" --limit 200 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt)|reverse|.[4:]|.[].tagName' | while read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "Deleting old release + tag: $tag"
+            gh release delete "$tag" -R "$REPO" --yes --cleanup-tag || true
+          done
+
       - name: Upload build artifacts (for manual runs)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4

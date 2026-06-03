@@ -1,0 +1,35 @@
+# On-demand release cleanup: keeps only the newest N releases (default 4) and
+# deletes the rest, including their tags and any orphaned drafts.
+#
+# Run it from the GitHub UI: Actions -> "cleanup-releases" -> Run workflow.
+name: cleanup-releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: "How many of the newest releases to keep"
+        default: "4"
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete all but the newest releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEEP: ${{ github.event.inputs.keep }}
+        run: |
+          KEEP="${KEEP:-4}"
+          echo "Keeping the $KEEP newest releases; deleting the rest..."
+          gh release list -R "$REPO" --limit 200 --json tagName,createdAt \
+            --jq "sort_by(.createdAt)|reverse|.[$KEEP:]|.[].tagName" | while read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "  deleting release + tag: $tag"
+            gh release delete "$tag" -R "$REPO" --yes --cleanup-tag || true
+          done
+          echo "Done."
