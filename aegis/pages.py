@@ -48,10 +48,10 @@ header.topbar{display:flex;align-items:center;gap:16px;padding:13px 24px;
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .pill .led.on{background:var(--ok);box-shadow:0 0 0 3px rgba(55,214,122,.18);animation:pulse 1.8s infinite}
 .pill .led.off{background:var(--err)}
-.appfoot{max-width:1180px;margin:28px auto 0;padding:16px 24px 34px;color:var(--faint);
+.appfoot{max-width:min(1560px,96vw);margin:28px auto 0;padding:16px 24px 34px;color:var(--faint);
   font-size:12px;display:flex;gap:16px;align-items:center;border-top:1px solid var(--line)}
 .appfoot a{color:var(--muted)}.appfoot a:hover{color:var(--txt)}
-main{max-width:1180px;margin:0 auto;padding:26px 24px}
+main{width:100%;max-width:min(1560px,96vw);margin:0 auto;padding:clamp(16px,2.2vw,30px) clamp(14px,1.8vw,28px)}
 .tabs{display:flex;gap:4px;margin-bottom:22px;border-bottom:1px solid var(--line)}
 .tabs button{background:transparent;border:none;color:var(--muted);border-radius:0;padding:10px 14px;
   border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:500}
@@ -101,6 +101,11 @@ main{max-width:1180px;margin:0 auto;padding:26px 24px}
 .modal .close{position:absolute;top:18px;right:22px;width:40px;height:40px;border-radius:50%;
   background:rgba(255,255,255,.08);border:none;color:#fff;display:grid;place-items:center;cursor:pointer}
 .modal .close:hover{background:rgba(255,255,255,.16)}
+.dialog{background:var(--panel);border:1px solid var(--line2);border-radius:var(--r2);
+  padding:24px;max-width:430px;box-shadow:var(--shadow)}
+.dialog h3{margin:0 0 8px;font-size:17px}
+.dialog p{margin:0 0 18px;color:var(--muted);font-size:13.5px;line-height:1.6}
+.dialog-actions{display:flex;gap:10px;flex-wrap:wrap}
 .bar{display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap}
 .bar .sel{color:var(--muted);font-size:13px}
 .card.sel{outline:2px solid var(--accent2);outline-offset:-2px}
@@ -114,6 +119,21 @@ main{max-width:1180px;margin:0 auto;padding:26px 24px}
 .check .ico{width:14px;height:14px}
 .selmode .check{display:flex}
 .card.sel .check{background:var(--accent2);border-color:var(--accent2)}
+/* Adapt to any resolution / window size */
+@media(max-width:820px){
+  header.topbar{flex-wrap:wrap;gap:10px;padding:11px 16px}
+  .pills{margin-left:0;width:100%}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:13px}
+  .tabs{overflow-x:auto;white-space:nowrap}
+  .appfoot{flex-wrap:wrap;gap:10px}
+  .wizard .row{flex-wrap:wrap}
+  .wizard .row label{width:100%}
+  .wizard .row input,.wizard .row select{max-width:none}
+}
+@media(max-width:480px){
+  .grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .modal{padding:12px}
+}
 """
 
 DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
@@ -122,6 +142,7 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <header class=topbar>
   <div class=brand><svg class=logo width=28 height=28 viewBox="0 0 48 48" fill=none><path d="M24 3 41 9 41 24 C41 35 33 42 24 45 C15 42 7 35 7 24 L7 9 Z" fill="#161b24" stroke="#ff5a3c" stroke-width="2.6"/><path d="M20 16 33 24 20 32 Z" fill="#ff5a3c"/></svg> Aegis Clipper</div>
   <div class=pills id=pills></div>
+  <button class=btn-icon id=exitBtn title="Minimize or quit" style=margin-left:4px><svg class=ico viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1=21 y1=12 x2=9 y2=12/></svg></button>
 </header>
 <main>
   <div id=updateBanner style="display:none;flex-wrap:wrap;align-items:center;gap:12px;background:#1a2433;
@@ -170,6 +191,15 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 </footer>
 
 <div class=modal id=modal><button class=close id=modalClose><svg class=ico viewBox="0 0 24 24"><line x1=18 y1=6 x2=6 y2=18/><line x1=6 y1=6 x2=18 y2=18/></svg></button><video id=player controls></video></div>
+<div class=modal id=exitDialog><div class=dialog>
+  <h3>Close Aegis Clipper?</h3>
+  <p>Keep it running in the background so it keeps capturing your clips while you play, or quit completely.</p>
+  <div class=dialog-actions>
+    <button class=primary id=bgBtn>Run in background</button>
+    <button class=ghost id=quitBtn>Quit</button>
+    <button class=ghost id=exitCancel>Cancel</button>
+  </div>
+</div></div>
 <div class=toast id=toast></div>
 
 <script>
@@ -373,6 +403,13 @@ function pollUpdate(){
     }
   },600);
 }
+
+// ----- close: background vs quit -----
+$('#exitBtn').onclick=()=>$('#exitDialog').classList.add('show');
+$('#exitCancel').onclick=()=>$('#exitDialog').classList.remove('show');
+$('#exitDialog').onclick=e=>{if(e.target===$('#exitDialog'))$('#exitDialog').classList.remove('show');};
+$('#bgBtn').onclick=()=>{$('#exitDialog').classList.remove('show');toast('Running in the background — reopen any time from the tray icon.');try{window.close();}catch(e){}};
+$('#quitBtn').onclick=async()=>{$('#quitBtn').textContent='Quitting…';try{await api('/api/quit',{method:'POST'});}catch(e){}setTimeout(()=>{try{window.close();}catch(e){}},500);};
 
 $('#checkUpd').onclick=async()=>{
   const s=$('#updStatus');s.textContent='Checking…';

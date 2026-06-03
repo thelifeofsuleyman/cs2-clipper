@@ -22,6 +22,21 @@ def test_setup_page_renders(app_client):
     assert r.status_code == 200 and b"rec_preset" in r.data
 
 
+def test_quit_endpoint_schedules_exit(app_client, monkeypatch):
+    client, *_ = app_client
+    scheduled = {}
+
+    class FakeTimer:
+        def __init__(self, t, fn):
+            self.fn = fn
+        def start(self):
+            scheduled["yes"] = True   # don't actually fire -> no os._exit in tests
+
+    monkeypatch.setattr("threading.Timer", FakeTimer)
+    r = client.post("/api/quit").get_json()
+    assert r["ok"] is True and scheduled.get("yes")
+
+
 def test_health_and_status(app_client):
     client, *_ = app_client
     h = client.get("/health").get_json()

@@ -55,6 +55,22 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     def api_status():
         return jsonify(engine.status())
 
+    @app.post("/api/quit")
+    def api_quit():
+        """Fully exit the app (stop the engine + process). Used by the close
+        dialog's 'Quit' choice; 'Run in background' just closes the window."""
+        import os
+        import threading
+
+        def _bye():
+            try:
+                engine.stop_recording()
+            except Exception:
+                pass
+            os._exit(0)
+        threading.Timer(0.5, _bye).start()   # let the HTTP response return first
+        return jsonify(ok=True)
+
     @app.get("/api/logs")
     def api_logs():
         return jsonify(lines=recent(200))
