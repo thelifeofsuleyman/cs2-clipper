@@ -164,6 +164,8 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   <span>Aegis Clipper <b>v%VER%</b></span>
   <a href="https://github.com/thelifeofsuleyman/cs2-clipper/releases" target=_blank rel=noopener>Releases</a>
   <a href="/setup">Settings</a>
+  <button class=ghost id=checkUpd style="padding:5px 11px;font-size:12px">Check for updates</button>
+  <span id=updStatus></span>
   <span id=footStatus style=margin-left:auto></span>
 </footer>
 
@@ -372,6 +374,13 @@ function pollUpdate(){
   },600);
 }
 
+$('#checkUpd').onclick=async()=>{
+  const s=$('#updStatus');s.textContent='Checking…';
+  const r=await api('/api/update/check');
+  if(r&&r.update){s.textContent='';$('#updateBanner').style.display='flex';checkUpdate();}
+  else if(r&&r.error){s.textContent='Couldn’t check — '+r.error;}
+  else{s.textContent='You’re on the latest version';}
+};
 loadStatus();loadClips();checkUpdate();
 setInterval(loadStatus,4000);
 setInterval(()=>{

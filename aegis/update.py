@@ -51,18 +51,35 @@ def is_newer(remote: str, local: str = __version__) -> bool:
     return _parse(remote) > _parse(local)
 
 
+_last_error = ""
+
+
+def get_last_error() -> str:
+    """Why the most recent check() couldn't determine an update (empty if fine)."""
+    return _last_error
+
+
 def check(cfg: Config) -> UpdateInfo | None:
-    """Return UpdateInfo if a newer release exists, else None. Never raises."""
+    """Return UpdateInfo if a newer release exists, else None. Never raises.
+    Records a human reason in get_last_error() when a check can't complete."""
+    global _last_error
+    _last_error = ""
     repo = cfg.get("update.repo", "")
     if not repo or "OWNER/REPO" in repo:
+        _last_error = "update repo not configured"
         return None
     try:
         r = requests.get(_API.format(repo=repo), timeout=8,
                          headers={"Accept": "application/vnd.github+json"})
+        if r.status_code == 403 and "rate limit" in (r.text or "").lower():
+            _last_error = "GitHub rate limit reached — try again in a few minutes"
+            return None
         if not r.ok:
+            _last_error = f"GitHub returned HTTP {r.status_code}"
             return None
         data = r.json()
     except Exception as e:
+        _last_error = "couldn't reach GitHub"
         log(f"Update check failed: {e}")
         return None
 

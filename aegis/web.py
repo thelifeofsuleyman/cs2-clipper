@@ -196,7 +196,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     def api_update_check():
         from . import update
         info = update.check(cfg)
-        return jsonify(update=info.as_dict() if info else None, current=_version())
+        return jsonify(update=info.as_dict() if info else None,
+                       current=_version(), error=update.get_last_error())
 
     @app.post("/api/update/apply")
     def api_update_apply():
