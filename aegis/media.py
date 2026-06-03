@@ -68,6 +68,25 @@ def probe_duration(ffmpeg: str, video: Path) -> float:
         return 0.0
 
 
+def quality_encode_args(ffmpeg: str, cfg) -> list[str]:
+    """Encoder args for a quality-based re-encode (polish, montage). Uses the
+    detected GPU encoder so 'baking' a clip/montage takes seconds, not minutes;
+    falls back to a fast CPU preset. Quality-targeted (CQ/CRF), not bitrate."""
+    from . import recorder
+    enc = recorder.pick_encoder(recorder._encoders_text(ffmpeg),
+                                cfg.get("recording.encoder", "auto"))
+    if enc == "h264_nvenc":
+        return ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "23",
+                "-pix_fmt", "yuv420p"]
+    if enc == "h264_amf":
+        return ["-c:v", "h264_amf", "-quality", "balanced", "-rc", "cqp",
+                "-qp_i", "23", "-qp_p", "23", "-pix_fmt", "yuv420p"]
+    if enc == "h264_qsv":
+        return ["-c:v", "h264_qsv", "-preset", "faster", "-global_quality", "23",
+                "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
+
+
 def make_test_clip(ffmpeg: str | None, out_path: Path, seconds: int = 5) -> Path | None:
     """Generate a short synthetic clip (test pattern + tone).
 
@@ -176,6 +195,7 @@ def build_montage(
     out_path: Path,
     music: Path | None = None,
     vertical: bool = False,
+    encode_args: list[str] | None = None,
 ) -> Path | None:
     """Concatenate ``clips`` (re-encoded to a common format) into one file.
 
@@ -211,8 +231,8 @@ def build_montage(
         filt += "".join(f"[v{i}][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[vout][aout]"
         maps = ["-map", "[vout]", "-map", "[aout]"]
 
-    args += ["-filter_complex", filt, *maps,
-             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+    venc = encode_args or ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+    args += ["-filter_complex", filt, *maps, *venc,
              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
              str(out_path)]
 

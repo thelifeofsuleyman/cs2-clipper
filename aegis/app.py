@@ -121,28 +121,60 @@ def _run_window(cfg, port: int, landing: str) -> bool:
         return False
 
 
-def _open_app_mode(url: str) -> bool:
-    """Open the dashboard in a chromeless browser window (--app mode) so it looks
-    like a real app (no tabs/address bar). Edge ships with Windows, so this is a
-    reliable native-window substitute when pywebview can't load."""
+def _find_chromium() -> str:
+    """Locate a Chromium browser (Edge is always on Windows). Checks the
+    registry App Paths first, then the usual install locations."""
     import os
-    import subprocess
-    candidates = [
+    if sys.platform == "win32":
+        try:
+            import winreg
+            for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                for name in ("msedge.exe", "chrome.exe", "brave.exe"):
+                    try:
+                        key = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{name}"
+                        with winreg.OpenKey(hive, key) as k:
+                            p = winreg.QueryValue(k, None)
+                            if p and os.path.exists(p):
+                                return p
+                    except OSError:
+                        continue
+        except Exception:
+            pass
+    for p in (
         os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
         os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
         os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
         os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
         os.path.expandvars(r"%LocalAppData%\Programs\BraveSoftware\Brave-Browser\Application\brave.exe"),
-    ]
-    for exe in candidates:
-        try:
-            if exe and os.path.exists(exe):
-                subprocess.Popen([exe, f"--app={url}", "--window-size=1180,840"])
-                log(f"Opened app window via {os.path.basename(exe)} (--app mode)")
-                return True
-        except Exception as e:
-            log(f"app-mode launch failed for {exe}: {e}")
-    return False
+    ):
+        if p and os.path.exists(p):
+            return p
+    return ""
+
+
+def _open_app_mode(url: str) -> bool:
+    """Open the dashboard as a real, separate desktop window — a chromeless
+    Chromium `--app` window with its OWN profile dir (so it's isolated from the
+    user's browsing, gets its own taskbar entry, and shows no tabs/address bar).
+    This is the reliable native-app path when pywebview can't bundle."""
+    import subprocess
+    exe = _find_chromium()
+    if not exe:
+        return False
+    profile = str(paths.data_root() / "appwindow")
+    try:
+        subprocess.Popen([
+            exe, f"--app={url}",
+            f"--user-data-dir={profile}",
+            "--window-size=1200,840",
+            "--no-first-run", "--no-default-browser-check",
+        ])
+        import os
+        log(f"Opened the app window via {os.path.basename(exe)} (standalone --app mode)")
+        return True
+    except Exception as e:
+        log(f"app-mode launch failed: {e}")
+        return False
 
 
 def _start_tray_for_window(window, cfg, port: int):

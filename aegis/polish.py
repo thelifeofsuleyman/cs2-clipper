@@ -95,7 +95,8 @@ def make_intro_card(name: str, avatar: Path | None, kills: int,
 
 
 def build_polish_cmd(ffmpeg: str, raw: Path, out: Path, intro_png: Path | None,
-                     duration: float, *, fade: bool, intro_seconds: float) -> list[str]:
+                     duration: float, *, fade: bool, intro_seconds: float,
+                     encode_args: list[str] | None = None) -> list[str]:
     """ffmpeg command: fade the clip + overlay the intro card for the first
     `intro_seconds` (with its own fade in/out)."""
     args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(raw)]
@@ -121,10 +122,12 @@ def build_polish_cmd(ffmpeg: str, raw: Path, out: Path, intro_png: Path | None,
         parts.append(f"[base1][intro]overlay=0:0:enable='lt(t,{intro_seconds:.2f})'[v]")
         last = "[v]"
 
+    venc = encode_args or ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                           "-pix_fmt", "yuv420p"]
     args += [
         "-filter_complex", ";".join(parts),
         "-map", last, "-map", "0:a?",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+        *venc,
         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(out),
     ]
     return args
@@ -152,6 +155,7 @@ def polish_clip(cfg: Config, raw: Path, kills: int, map_name: str,
         ffmpeg, raw, out, intro_png, duration,
         fade=bool(cfg.get("polish.fade", True)),
         intro_seconds=float(cfg.get("polish.intro_seconds", 3.0)),
+        encode_args=media.quality_encode_args(ffmpeg, cfg),   # GPU when available
     )
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,

@@ -310,4 +310,5 @@ class Engine:
             ffmpeg, paths_in, out,
             music=Path(music) if music and Path(music).exists() else None,
             vertical=bool(self.cfg.get("montage.vertical_export")),
+            encode_args=media.quality_encode_args(ffmpeg, self.cfg),   # GPU when available
         )
