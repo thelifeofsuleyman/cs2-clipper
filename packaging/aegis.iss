@@ -70,7 +70,10 @@ Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup
 ; Ensure the WebView2 runtime (the native window needs it) before first launch.
 Filename: "{tmp}\MicrosoftEdgeWebView2Setup.exe"; Parameters: "/silent /install"; \
   StatusMsg: "Installing WebView2 runtime..."; Check: NeedsWebView2
+; Interactive install: offer to launch on the Finished page.
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; Flags: nowait postinstall skipifsilent
+; Silent auto-update: relaunch the app automatically once files are replaced.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
 
 [Code]
 { True when the WebView2 evergreen runtime is not installed (machine or per-user). }

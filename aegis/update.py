@@ -153,41 +153,29 @@ def _download_and_install(info: UpdateInfo) -> None:
 
 
 def _launch_installer_and_exit(installer: str) -> None:
-    """Run the installer AFTER this process (and its ffmpeg child) have exited.
+    """Launch the installer and exit immediately so it can replace our files.
 
-    The installer can't replace AegisClipper.exe / ffmpeg.exe while we're still
-    running ("DeleteFile failed; code 5"). So we hand off to a HIDDEN PowerShell
-    that waits for this process to exit, installs silently, deletes the
-    downloaded installer, and relaunches the new app.
-
-    Why PowerShell and not `cmd ... timeout`: `timeout` needs a console, so when
-    run detached it errors out (and flashes a terminal) and the update never
-    completes. `Wait-Process` + `Start-Process -Wait` have no such requirement
-    and run completely windowless under CREATE_NO_WINDOW.
+    Kept deliberately minimal after repeated update breakage:
+    - Launch the installer by its ABSOLUTE path (no cmd/PowerShell), so there's
+      no PATH lookup that can fail with "WinError 2: file not found".
+    - Exit instantly (os._exit). The installer extracts for a few seconds first,
+      by which time we (and ffmpeg, via the Job Object) are already gone, so the
+      file-replace step isn't blocked.
+    - /CLOSEAPPLICATIONS is a backstop; the installer's WizardSilent [Run] entry
+      relaunches the app once the silent update finishes.
+    If the launch itself fails, the exception propagates and the UI shows an
+    error instead of leaving the app half-closed.
     """
     import os
     import subprocess
 
-    exe = sys.executable                  # the install-dir AegisClipper.exe to relaunch
-    pid = os.getpid()
-    q = lambda s: s.replace("'", "''")    # escape single quotes for PowerShell
-
-    ps = (
-        f"Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue;"
-        "Start-Sleep -Milliseconds 800;"
-        f"Start-Process -FilePath '{q(installer)}' "
-        "-ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait;"
-        f"Remove-Item -LiteralPath '{q(installer)}' -Force -ErrorAction SilentlyContinue;"
-        f"Start-Process -FilePath '{q(exe)}'"
-    )
-    CREATE_NO_WINDOW = 0x08000000
+    DETACHED_PROCESS = 0x00000008
     subprocess.Popen(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-         "-WindowStyle", "Hidden", "-Command", ps],
-        creationflags=CREATE_NO_WINDOW,
+        [installer, "/SILENT", "/CLOSEAPPLICATIONS", "/NORESTART"],
+        creationflags=DETACHED_PROCESS,
         close_fds=True,
     )
-    os._exit(0)   # exit now; Wait-Process unblocks, then the installer runs
+    os._exit(0)
 
 
 # Backwards-compatible alias.
