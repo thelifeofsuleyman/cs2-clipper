@@ -283,11 +283,19 @@ class Engine:
         if not ffmpeg:
             return {"ok": False, "detail": "ffmpeg not found"}
         out = paths.clips_dir() / f"capture_test_{int(time.time())}.mp4"
-        if not media.capture_screen_test(ffmpeg, out, seconds, self.cfg):
-            return {"ok": False, "detail": "screen capture failed — see the Activity log"}
+        method = media.capture_screen_test(ffmpeg, out, seconds, self.cfg)
+        if not method:
+            return {"ok": False,
+                    "detail": "screen capture failed with both ddagrab and gdigrab — see the Activity log"}
+        # Remember the method that worked so the live recorder uses it too.
+        if method != self.cfg.get("recording.capture"):
+            self.cfg.set("recording.capture", method)
+            self.cfg.save()
+            self.restart_recording()
+            log(f"Capture method switched to {method} (it's what works on this PC)")
         clip = self._catalog_clip(out, 0, "screen capture test", 0, "?")
-        self.catalog.update(clip.id, title="Screen capture test", tags=["test"])
-        return {"ok": True, "clip_id": clip.id}
+        self.catalog.update(clip.id, title=f"Screen capture test ({method})", tags=["test"])
+        return {"ok": True, "clip_id": clip.id, "method": method}
 
     def build_montage(self, clip_ids: list[str]) -> Path | None:
         """Stitch selected clips (newest-first order) into one montage file."""

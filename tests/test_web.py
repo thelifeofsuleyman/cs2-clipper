@@ -58,6 +58,30 @@ def test_clips_listing_empty(app_client):
     assert client.get("/api/clips").get_json() == {"clips": []}
 
 
+def test_delete_clip_removes_the_file(app_client, data_dir):
+    import time
+    from aegis import paths
+    from aegis.clips import Clip
+    client, cfg, catalog, engine = app_client
+    f = paths.clips_dir() / "mirage_4K.mp4"
+    f.write_bytes(b"x" * 16)
+    catalog.add(Clip(id="c1", path=str(f), created=time.time(), kills=4))
+    assert client.delete("/api/clips/c1").get_json()["ok"] is True
+    assert not f.exists()                       # file actually deleted, not just unlisted
+
+
+def test_delete_clip_keep_file(app_client, data_dir):
+    import time
+    from aegis import paths
+    from aegis.clips import Clip
+    client, cfg, catalog, engine = app_client
+    f = paths.clips_dir() / "dust2_1K.mp4"
+    f.write_bytes(b"x" * 16)
+    catalog.add(Clip(id="c2", path=str(f), created=time.time(), kills=1))
+    client.delete("/api/clips/c2?keep=1")
+    assert f.exists()                           # ?keep=1 leaves the file
+
+
 def test_finish_setup_flips_first_run(app_client):
     client, cfg, *_ = app_client
     assert cfg.get("first_run") is True

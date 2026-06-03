@@ -73,7 +73,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
     @app.delete("/api/clips/<clip_id>")
     def api_delete_clip(clip_id: str):
-        delete_file = request.args.get("file") == "1"
+        # Delete the actual video file too, by default (pass ?keep=1 to keep it).
+        delete_file = request.args.get("keep") != "1"
         ok = catalog.remove(clip_id, delete_file=delete_file)
         return (jsonify(ok=True) if ok else (jsonify(error="not found"), 404))
 

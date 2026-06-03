@@ -230,7 +230,7 @@ function bindCards(){
     }finally{b.disabled=false;b.textContent='Share';loadClips();}
   });
   $$('[data-del]').forEach(b=>b.onclick=async()=>{
-    if(!confirm('Delete this clip from the library? (the video file stays on disk)'))return;
+    if(!confirm('Delete this clip and its video file? This cannot be undone.'))return;
     await fetch(`/api/clips/${b.dataset.del}`,{method:'DELETE'});loadClips();
   });
 }
@@ -508,7 +508,7 @@ async function captureTest(){
   if(!(await save()))return;
   const r=await api('/api/capture-test',{method:'POST'});
   $('#testOut').innerHTML=r&&r.ok
-    ?'<span class=ok>✓ Screen captured — open the Clips tab to confirm it recorded your screen</span>'
+    ?`<span class=ok>✓ Captured via ${r.method} — open the Clips tab and confirm it shows your screen (not black)</span>`
     :`<span class=err>✗ ${(r&&r.detail)||'capture failed (see Activity log)'}</span>`;
 }
 

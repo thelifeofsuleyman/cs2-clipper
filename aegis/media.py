@@ -88,22 +88,16 @@ def make_test_clip(ffmpeg: str | None, out_path: Path, seconds: int = 5) -> Path
     return out_path if (r.returncode == 0 and out_path.exists()) else None
 
 
-def capture_screen_test(ffmpeg: str | None, out_path: Path, seconds: int, cfg) -> bool:
-    """Record `seconds` of the actual screen to out_path, using the configured
-    quality preset, capture method, and encoder. Proves the real recorder works
-    (ddagrab + GPU encode) without needing a kill in CS2."""
-    if not ffmpeg:
-        return False
+def _capture_once(ffmpeg: str, out_path: Path, seconds: int, cfg, method: str) -> bool:
     from . import recorder
     preset = cfg.get("recording.preset", "medium")
     w, h, fps, bitrate = recorder.PRESETS.get(preset, recorder.PRESETS["medium"])
     fps = int(cfg.get("recording.fps", fps) or fps)
     encoder = recorder.pick_encoder(recorder._encoders_text(ffmpeg),
                                     cfg.get("recording.encoder", "auto"))
-    use_dda = cfg.get("recording.capture", "ddagrab") != "gdigrab"
 
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
-    if use_dda:
+    if method == "ddagrab":
         chain = f"ddagrab=output_idx=0:framerate={fps},hwdownload,format=bgra"
         if w and h:
             chain += f",scale={w}:{h}"
@@ -116,12 +110,26 @@ def capture_screen_test(ffmpeg: str | None, out_path: Path, seconds: int, cfg) -
     cmd += recorder._encoder_args(encoder, bitrate)
     cmd += ["-t", str(seconds), "-movflags", "+faststart", str(out_path)]
 
-    log(f"Screen capture test ({preset}, {encoder}, {seconds}s)")
+    log(f"Screen capture test via {method} ({preset}, {encoder}, {seconds}s)")
     r = _run(cmd)
-    if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
-        return True
-    log(f"Screen capture test failed: {(r.stderr or '')[-200:]}")
-    return False
+    ok = r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1024
+    if not ok:
+        log(f"Capture via {method} failed: {(r.stderr or '')[-200:]}")
+    return ok
+
+
+def capture_screen_test(ffmpeg: str | None, out_path: Path, seconds: int, cfg) -> str | None:
+    """Record `seconds` of the real screen, trying the configured capture method
+    first and falling back to the other one. Returns the method that worked
+    ('ddagrab'/'gdigrab') so the caller can remember it, or None if both failed."""
+    if not ffmpeg:
+        return None
+    pref = cfg.get("recording.capture", "ddagrab")
+    order = [pref] + [m for m in ("ddagrab", "gdigrab") if m != pref]
+    for method in order:
+        if _capture_once(ffmpeg, out_path, seconds, cfg, method):
+            return method
+    return None
 
 
 def make_thumbnail(ffmpeg: str | None, video: Path, clip_id: str) -> Path | None:
