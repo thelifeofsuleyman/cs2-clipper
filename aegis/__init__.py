@@ -19,5 +19,5 @@ Package layout:
   app         - process entry: engine + dashboard + system tray
 """
 
-__version__ = "2.1.5"
+__version__ = "2.1.6"
 APP_NAME = "Aegis Clipper"
