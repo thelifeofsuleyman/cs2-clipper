@@ -53,9 +53,18 @@ def test_config_get_and_post_roundtrip(app_client):
     assert client.get("/api/config").get_json()["recording"]["preset"] == "low"
 
 
-def test_detect_endpoint_shape(app_client):
+def test_detect_endpoint_shape(app_client, monkeypatch):
+    from aegis import media, recorder
+
+    def unexpected_probe(_):
+        raise AssertionError("Settings detection must not start an FFmpeg process")
+
+    monkeypatch.setattr(media, "resolve_ffmpeg", lambda _: "ffmpeg.exe")
+    monkeypatch.setattr(recorder, "_encoders_text", unexpected_probe)
     client, *_ = app_client
-    d = client.get("/api/detect").get_json()
+    response = client.get("/api/detect")
+    assert response.status_code == 200
+    d = response.get_json()
     for key in ("cs2_cfg_dir", "ffmpeg", "encoder", "gpu_accel"):
         assert key in d
 
