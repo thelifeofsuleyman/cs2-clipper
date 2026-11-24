@@ -30,6 +30,19 @@ def main() -> None:
     base = shield(256)
     base.save(out, sizes=[(s, s) for s in (16, 32, 48, 64, 128, 256)])
     print("wrote", out)
+    vendor = os.path.join(os.path.dirname(__file__), "vendor")
+    os.makedirs(vendor, exist_ok=True)
+    art = Image.new("RGB", (328, 628), "#151820")
+    draw = ImageDraw.Draw(art)
+    for inset, color in [(24, "#352929"), (46, "#41302e"), (68, "#513630")]:
+        draw.ellipse((inset, 143 + inset, 328 - inset, 471 - inset), outline=color, width=2)
+    logo = shield(138)
+    art.paste(logo, (95, 238), logo)
+    art.save(os.path.join(vendor, "wizard-art.png"))
+    small = Image.new("RGB", (110, 110), "#151820")
+    logo = shield(96)
+    small.paste(logo, (7, 7), logo)
+    small.save(os.path.join(vendor, "wizard-mark.png"))
 
 
 if __name__ == "__main__":

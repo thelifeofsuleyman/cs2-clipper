@@ -10,10 +10,12 @@ there are no template/static files to locate after PyInstaller freezes the app.
 """
 from __future__ import annotations
 
+import re
+import secrets
 import threading
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, redirect, request, send_file
+from flask import Flask, Response, abort, g, jsonify, redirect, request, send_file
 
 from . import __version__, config, paths
 from .config import Config
@@ -25,7 +27,41 @@ from .pages import DASHBOARD_HTML, SETUP_HTML
 
 def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     app = Flask(__name__)
+    app.config.update(MAX_CONTENT_LENGTH=256 * 1024, AEGIS_SESSION=secrets.token_hex(32))
+    session = app.config["AEGIS_SESSION"]
     media_job = threading.Lock()
+
+    @app.before_request
+    def check_local_request():
+        if not re.fullmatch(r"(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?", request.host, re.I):
+            abort(400)
+        origin = request.headers.get("Origin")
+        if origin is not None and origin != request.host_url.rstrip("/"):
+            abort(403)
+        if request.headers.get("Sec-Fetch-Site") in {"cross-site", "same-site"}:
+            abort(403)
+        if request.path.startswith("/api/"):
+            if not secrets.compare_digest(request.headers.get("X-Aegis-Session", "").encode(), session.encode()):
+                abort(403)
+
+    @app.after_request
+    def protect_response(response):
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        if request.path.startswith("/api/") or response.mimetype == "text/html":
+            response.headers["Cache-Control"] = "no-store"
+        if nonce := g.get("csp_nonce"):
+            response.headers["Content-Security-Policy"] = (
+                f"default-src 'self'; script-src 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+            )
+        return response
+
+    def render_page(page: str) -> str:
+        g.csp_nonce = secrets.token_hex(24)
+        return page.replace("<script>", f'<script nonce="{g.csp_nonce}">').replace("%SESSION%", session)
 
     def run_media_job(run):
         if not media_job.acquire(blocking=False):
@@ -56,12 +92,12 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     def dashboard():
         if cfg.get("first_run"):
             return redirect("/setup")
-        return (DASHBOARD_HTML.replace("%VER%", __version__)
-                .replace("%AUTO_UPDATE%", "true" if cfg.get("update.auto_check") else "false"))
+        return render_page(DASHBOARD_HTML.replace("%VER%", __version__)
+                           .replace("%AUTO_UPDATE%", "true" if cfg.get("update.auto_check") else "false"))
 
     @app.get("/setup")
     def setup():
-        return SETUP_HTML
+        return render_page(SETUP_HTML)
 
     # ───────── status / logs ─────────
     @app.get("/api/status")
@@ -144,15 +180,20 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         c = catalog.get(clip_id)
         if not c or not c.exists():
             return "not found", 404
-        return send_file(c.path, conditional=True)
+        path = Path(c.path)
+        mime = {".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime"}
+        if not path.is_file() or path.suffix.lower() not in mime:
+            return "not found", 404
+        return send_file(path, conditional=True, mimetype=mime[path.suffix.lower()])
 
     @app.get("/clip/<clip_id>/thumb")
     def clip_thumb(clip_id: str):
         c = catalog.get(clip_id)
         if c and c.thumb:
-            tp = paths.thumbs_dir() / c.thumb
-            if tp.exists():
-                return send_file(tp, conditional=True)
+            root = paths.thumbs_dir().resolve()
+            tp = (root / c.thumb).resolve()
+            if tp.parent == root and tp.suffix.lower() == ".jpg" and tp.is_file():
+                return send_file(tp, conditional=True, mimetype="image/jpeg")
         return _placeholder_thumb()
 
     # ───────── montage ─────────
@@ -180,8 +221,11 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
     @app.get("/montage/<name>")
     def montage_video(name: str):
-        p = paths.montages_dir() / Path(name).name
-        return send_file(p, conditional=True) if p.exists() else ("not found", 404)
+        root = paths.montages_dir().resolve()
+        p = (root / name).resolve()
+        if p.parent != root or p.suffix.lower() != ".mp4" or not p.is_file():
+            return "not found", 404
+        return send_file(p, conditional=True, mimetype="video/mp4")
 
     # ───────── setup wizard API ─────────
     @app.get("/api/config")
@@ -191,10 +235,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     @app.post("/api/config")
     def api_set_config():
         patch = request.get_json(silent=True)
-        if not isinstance(patch, dict) or any(
-            group in patch and not isinstance(patch[group], dict)
-            for group in ("recording", "engine", "obs", "uploads", "polish", "montage", "update")
-        ):
+        if not _valid_settings_patch(patch):
             return jsonify(error="Provide settings as a JSON object with settings groups."), 400
         before = cfg.as_dict()
         cfg.update(patch)
@@ -303,6 +344,28 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
 
 # ───────── helpers ─────────
+_UI_SETTINGS = {
+    "engine": {"debounce_sec", "min_kills", "cs2_cfg_dir"},
+    "recording": {"backend", "preset", "prioritize_game_fps", "speaker_audio",
+                  "clip_seconds", "only_when_game_running"},
+    "polish": {"enabled"},
+    "obs": {"replay_dir", "port", "password"},
+    "uploads": {
+        "telegram": {"enabled", "bot_token", "chat_id"},
+        "discord": {"enabled", "webhook_url"},
+        "youtube": {"enabled", "client_secrets", "privacy"},
+    },
+}
+
+
+def _valid_settings_patch(patch, allowed=_UI_SETTINGS):
+    if not isinstance(patch, dict) or any(key not in allowed for key in patch):
+        return False
+    if isinstance(allowed, set):
+        return all(type(value) in (str, int, float, bool) for value in patch.values())
+    return all(_valid_settings_patch(value, allowed[key]) for key, value in patch.items())
+
+
 def _version() -> str:
     return __version__
 

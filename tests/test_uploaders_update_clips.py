@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from aegis import uploaders, update
 from aegis.clips import Catalog, Clip
@@ -40,6 +41,20 @@ def test_semver_compare():
 def test_update_check_noop_for_placeholder_repo(cfg):
     cfg.set("update.repo", "OWNER/REPO")
     assert update.check(cfg) is None      # never touches the network
+
+
+def test_update_requires_exact_installer_and_digest(cfg, monkeypatch):
+    version = "v99.0.0"
+    url = f"{update._RELEASES}/download/{version}/{update._INSTALLER}"
+    asset = {"name": update._INSTALLER, "browser_download_url": url, "size": 2}
+    payload = {"tag_name": version, "assets": [asset]}
+    monkeypatch.setattr(update.requests, "get", lambda *a, **kw: SimpleNamespace(
+        status_code=200, json=lambda: payload))
+    assert update.check(cfg).asset_url == ""
+    asset["digest"] = "sha256:" + "a" * 64
+    assert update.check(cfg).asset_url == url
+    asset["name"] = "other.exe"
+    assert update.check(cfg).asset_url == ""
 
 
 # ───────── catalog ─────────

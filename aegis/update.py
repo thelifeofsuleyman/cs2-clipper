@@ -14,11 +14,15 @@ apply() just opens the release page in the browser instead.
 """
 from __future__ import annotations
 
+import hashlib
 import re
+import shutil
 import sys
 import threading
 import webbrowser
 from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 
@@ -26,7 +30,11 @@ from . import __version__
 from .config import Config
 from .log import log
 
-_API = "https://api.github.com/repos/{repo}/releases/latest"
+_REPO = "thelifeofsuleyman/cs2-clipper"
+_RELEASES = f"https://github.com/{_REPO}/releases"
+_API = f"https://api.github.com/repos/{_REPO}/releases/latest"
+_INSTALLER = "AegisClipper-Setup.exe"
+_MAX_INSTALLER_BYTES = 512 * 1024 * 1024
 
 
 @dataclass
@@ -35,6 +43,8 @@ class UpdateInfo:
     notes: str
     asset_url: str          # browser_download_url of the setup .exe
     html_url: str           # release page (fallback for source installs)
+    digest: str = ""
+    size: int = 0
 
     def as_dict(self) -> dict:
         return {"version": self.version, "notes": self.notes,
@@ -65,16 +75,16 @@ def check(cfg: Config) -> UpdateInfo | None:
     global _last_error
     _last_error = ""
     repo = cfg.get("update.repo", "")
-    if not repo or "OWNER/REPO" in repo:
-        _last_error = "update repo not configured"
+    if repo != _REPO:
+        _last_error = "automatic updates require the official release repository"
         return None
     try:
-        r = requests.get(_API.format(repo=repo), timeout=8,
+        r = requests.get(_API, timeout=8, allow_redirects=False,
                          headers={"Accept": "application/vnd.github+json"})
         if r.status_code == 403 and "rate limit" in (r.text or "").lower():
             _last_error = "GitHub rate limit reached — try again in a few minutes"
             return None
-        if not r.ok:
+        if r.status_code != 200:
             _last_error = f"GitHub returned HTTP {r.status_code}"
             return None
         data = r.json()
@@ -83,17 +93,27 @@ def check(cfg: Config) -> UpdateInfo | None:
         log(f"Update check failed: {e}")
         return None
 
+    if not isinstance(data, dict) or not isinstance(data.get("assets"), list):
+        _last_error = "unexpected release metadata"
+        return None
     tag = data.get("tag_name", "")
-    if not is_newer(tag):
+    if not isinstance(tag, str) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) or not is_newer(tag):
         return None
 
-    asset = next((a["browser_download_url"] for a in data.get("assets", [])
-                  if a.get("name", "").lower().endswith(".exe")), "")
+    expected_url = f"{_RELEASES}/download/{tag}/{_INSTALLER}"
+    asset = next((a for a in data["assets"] if isinstance(a, dict) and a.get("name") == _INSTALLER
+                  and a.get("browser_download_url") == expected_url), {})
+    digest = asset.get("digest") or ""
+    size = asset.get("size")
+    verified_metadata = (isinstance(digest, str) and re.fullmatch(r"sha256:[a-f0-9]{64}", digest)
+                         and type(size) is int and 0 < size <= _MAX_INSTALLER_BYTES)
     info = UpdateInfo(
         version=tag.lstrip("v"),
         notes=(data.get("body") or "").strip()[:4000],
-        asset_url=asset,
-        html_url=data.get("html_url", ""),
+        asset_url=expected_url if verified_metadata else "",
+        html_url=f"{_RELEASES}/tag/{tag}",
+        digest=digest if verified_metadata else "",
+        size=size if verified_metadata else 0,
     )
     log(f"Update available: {info.version}")
     return info
@@ -134,38 +154,51 @@ def start_apply(info: UpdateInfo) -> dict:
 
 
 def _download_and_install(info: UpdateInfo) -> None:
-    import os
-    import subprocess
     import tempfile
 
+    directory = None
     try:
-        dest = os.path.join(tempfile.gettempdir(), "AegisClipper-Setup.exe")
-        with requests.get(info.asset_url, stream=True, timeout=120) as r:
-            r.raise_for_status()
-            total = int(r.headers.get("Content-Length", 0) or 0)
+        directory = Path(tempfile.mkdtemp(prefix="AegisClipper-update-"))
+        dest = directory / _INSTALLER
+        total = info.size
+        if (info.asset_url != f"{_RELEASES}/download/v{info.version}/{_INSTALLER}"
+                or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", info.version)
+                or not 0 < total <= _MAX_INSTALLER_BYTES
+                or not re.fullmatch(r"sha256:[a-f0-9]{64}", info.digest)):
+            raise ValueError("Unverified installer metadata")
+        with requests.get(info.asset_url, stream=True, timeout=(8, 30), allow_redirects=False) as initial:
+            location = initial.headers.get("Location", "")
+            target = urlsplit(location)
+            if (initial.status_code not in (302, 303, 307, 308)
+                    or target.scheme != "https"
+                    or target.netloc not in {"release-assets.githubusercontent.com", "objects.githubusercontent.com"}):
+                raise ValueError("Unexpected installer download location")
+        with requests.get(location, stream=True, timeout=(8, 30), allow_redirects=False) as r:
+            if r.status_code != 200:
+                raise IOError("GitHub could not deliver the installer")
             _set_progress(total=total)
             done = 0
-            with open(dest, "wb") as f:
+            digest = hashlib.sha256()
+            with dest.open("xb") as f:
                 for chunk in r.iter_content(chunk_size=1 << 16):
                     if not chunk:
                         continue
-                    f.write(chunk)
                     done += len(chunk)
+                    if done > total:
+                        raise IOError("Installer exceeds the published size")
+                    digest.update(chunk)
+                    f.write(chunk)
                     pct = round(done / total * 100, 1) if total else 0.0
                     _set_progress(downloaded=done, pct=pct)
-        # Guard against a truncated download before we run an installer.
-        if total and done != total:
-            raise IOError(f"incomplete download ({done}/{total} bytes)")
+        if done != total or f"sha256:{digest.hexdigest()}" != info.digest:
+            raise IOError("Installer failed SHA-256 verification")
+        _set_progress(state="installing", pct=100.0, detail="installing")
+        log("Verified update downloaded. Starting installer.")
+        _launch_installer_and_exit(str(dest))
     except Exception as e:
+        if directory is not None:
+            shutil.rmtree(directory, ignore_errors=True)
         log(f"Update download failed: {e}")
-        _set_progress(state="error", detail=str(e)[:200])
-        return
-
-    _set_progress(state="installing", pct=100.0, detail="installing")
-    log("Update downloaded — exiting so the installer can replace files.")
-    try:
-        _launch_installer_and_exit(dest)
-    except Exception as e:
         _set_progress(state="error", detail=str(e)[:200])
 
 

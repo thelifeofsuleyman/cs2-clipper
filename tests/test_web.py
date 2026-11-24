@@ -22,6 +22,24 @@ def test_setup_page_renders(app_client):
     assert r.status_code == 200 and b"rec_preset" in r.data
 
 
+def test_api_requires_same_origin_and_dashboard_session(app_client):
+    client, _, _, _ = app_client
+    bare = client.application.test_client()
+    assert bare.get("/api/config").status_code == 403
+    assert client.get("/api/config", headers={"Host": "example.test"}).status_code == 400
+    assert client.post("/api/replay", headers={"Origin": "https://example.test"}).status_code == 403
+    assert client.post("/", headers={"Sec-Fetch-Site": "cross-site"}, json=_gsi(0)).status_code == 403
+    assert bare.post("/", json=_gsi(0)).status_code == 200
+    assert "frame-ancestors 'none'" in bare.get("/setup").headers["Content-Security-Policy"]
+
+
+def test_browser_settings_cannot_change_execution_paths(app_client):
+    client, cfg, _, _ = app_client
+    assert client.post("/api/config", json={"ffmpeg_path": "another.exe"}).status_code == 400
+    assert client.post("/api/config", json={"update": {"repo": "other/project"}}).status_code == 400
+    assert cfg.get("ffmpeg_path") == ""
+
+
 def test_config_restarts_only_the_active_recorder(app_client, monkeypatch):
     client, cfg, _, engine = app_client
     cfg.set("first_run", False)

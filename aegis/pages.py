@@ -848,7 +848,9 @@ function toast(text) {
 const jsonPost = body => ({method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
 async function api(url, options, timeout = 15000) {
   try {
-    const res = await fetch(url, {...options, signal:AbortSignal.timeout(timeout)});
+    const headers = new Headers(options?.headers);
+    headers.set('X-Aegis-Session', '%SESSION%');
+    const res = await fetch(url, {...options, headers, signal:AbortSignal.timeout(timeout)});
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) return {...payload, ok:false, error:payload.error || payload.detail || 'Request failed (' + res.status + ').'};
     return payload;

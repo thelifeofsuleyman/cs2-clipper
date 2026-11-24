@@ -35,7 +35,8 @@ def _make_server(app, port: int):
     # Prefer waitress (a real WSGI server) if present; fall back to Flask's.
     try:
         from waitress import create_server
-        server = create_server(app, host="127.0.0.1", port=port, threads=8)
+        server = create_server(app, host="127.0.0.1", port=port, threads=8,
+                               max_request_body_size=app.config["MAX_CONTENT_LENGTH"])
         return server.run
     except ImportError:
         from werkzeug.serving import make_server

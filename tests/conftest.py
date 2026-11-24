@@ -27,4 +27,6 @@ def app_client(cfg, monkeypatch):
     engine = Engine(cfg, catalog)
     application = web.create_app(cfg, catalog, engine)
     application.testing = True
-    return application.test_client(), cfg, catalog, engine
+    client = application.test_client()
+    client.environ_base["HTTP_X_AEGIS_SESSION"] = application.config["AEGIS_SESSION"]
+    return client, cfg, catalog, engine

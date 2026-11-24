@@ -44,7 +44,11 @@ if ($Ffmpeg) {
     New-Item -ItemType Directory -Force $vendor | Out-Null
     if (-not (Test-Path "$vendor\ffmpeg.exe")) {
         # BtbN's GitHub release builds are CI-friendly (gyan.dev rate-limits runners).
-        $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        $assetName = "ffmpeg-master-latest-win64-gpl.zip"
+        $url = "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/latest/$assetName"
+        $release = Invoke-RestMethod "https://api.github.com/repos/FFmpeg-Builds/FFmpeg-Builds/releases/tags/latest"
+        $asset = $release.assets | Where-Object { $_.name -eq $assetName -and $_.browser_download_url -eq $url }
+        if ($asset.digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "FFmpeg download digest is unavailable" }
         Write-Host "Downloading ffmpeg (BtbN win64-gpl)..." -ForegroundColor Cyan
         $vendorRoot = (Resolve-Path -LiteralPath $vendor).Path
         $scratch = Join-Path $vendorRoot ("download-" + [Guid]::NewGuid())
@@ -53,6 +57,9 @@ if ($Ffmpeg) {
             $zip = Join-Path $scratch "ffmpeg.zip"
             $unpacked = Join-Path $scratch "unpacked"
             Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
+            if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $asset.digest.Substring(7)) {
+                throw "FFmpeg archive does not match its published SHA-256 digest"
+            }
             Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
             $bin = Get-ChildItem $unpacked -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
             if (-not $bin) { throw "ffmpeg.exe not found in download" }
@@ -73,13 +80,9 @@ if ($Ffmpeg) {
     Write-Host "ffmpeg vendored." -ForegroundColor Green
 }
 
-# 2b. Generate the app icon (best effort; Pillow is a project dependency) ----
-try {
-    & $py packaging\make_icon.py
-    Write-Host "App icon generated." -ForegroundColor Green
-} catch {
-    Write-Warning "Icon generation skipped (default icon will be used): $_"
-}
+# 2b. Generate the app icon and installer artwork.
+& $py packaging\make_icon.py
+if ($LASTEXITCODE -ne 0) { throw "Installer artwork generation failed" }
 
 # 3. PyInstaller ----------------------------------------------------------
 Write-Host "Running PyInstaller..." -ForegroundColor Cyan
@@ -107,6 +110,10 @@ if ($Installer) {
     if (-not (Test-Path $wv)) {
         Write-Host "Downloading WebView2 bootstrapper..." -ForegroundColor Cyan
         Invoke-WebRequest "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $wv
+    }
+    $signature = Get-AuthenticodeSignature -LiteralPath $wv
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:^|, )CN=Microsoft Corporation(?:,|$)') {
+        throw "WebView2 bootstrapper does not have a valid Microsoft signature"
     }
 
     $iscc = @(

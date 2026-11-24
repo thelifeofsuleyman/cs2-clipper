@@ -30,10 +30,15 @@ OutputDir=Output
 OutputBaseFilename=AegisClipper-Setup
 Compression=lzma2
 SolidCompression=yes
-WizardStyle=modern
+WizardStyle=modern dark
+WizardImageFile=vendor\wizard-art.png
+WizardSmallImageFile=vendor\wizard-mark.png
+SetupIconFile=aegis.ico
+DisableWelcomePage=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; Per-user install needs no admin; flip to admin if installing to Program Files.
+PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ; ── in-place upgrade support ──
 ; Stamp the binary so the in-app updater and Windows see the new version.
@@ -48,6 +53,12 @@ RestartApplications=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+WelcomeLabel1=Install Aegis Clipper
+WelcomeLabel2=Set up automatic CS2 highlights and a local clip library.%n%nSetup will guide you through installation.
+WizardInstalling=Installing Aegis Clipper
+InstallingLabel=Setup is installing the app and its recording tools.
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
@@ -76,6 +87,11 @@ Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; Flags: nowait
 Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
 
 [Code]
+procedure InitializeWizard;
+begin
+  WizardForm.FilenameLabel.Visible := False;
+end;
+
 { True when the WebView2 evergreen runtime is not installed (machine or per-user). }
 function WebView2Installed: Boolean;
 var

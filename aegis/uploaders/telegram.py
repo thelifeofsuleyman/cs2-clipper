@@ -31,9 +31,10 @@ class TelegramUploader(Uploader):
                     },
                     files={"video": (clip.name, f, "video/mp4")},
                     timeout=300,
+                    allow_redirects=False,
                 )
-        except Exception as e:
-            return UploadResult(False, str(e))
-        if r.ok:
+        except (OSError, requests.RequestException):
+            return UploadResult(False, "Could not send the clip to Telegram")
+        if 200 <= r.status_code < 300:
             return UploadResult(True)
-        return UploadResult(False, f"HTTP {r.status_code}: {r.text[:120]}")
+        return UploadResult(False, f"Telegram returned HTTP {r.status_code}")

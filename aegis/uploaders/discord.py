@@ -9,6 +9,8 @@ fit (or ffmpeg is missing), we report a clear error rather than failing silently
 from __future__ import annotations
 
 from pathlib import Path
+import re
+from urllib.parse import urlsplit
 
 import requests
 
@@ -24,6 +26,14 @@ class DiscordUploader(Uploader):
         url = self.cfg.get("uploads.discord.webhook_url")
         if not url:
             return UploadResult(False, "not configured")
+        try:
+            target = urlsplit(url)
+            valid = (target.scheme == "https" and target.netloc in {"discord.com", "discordapp.com"}
+                     and re.fullmatch(r"/api/(?:v[0-9]+/)?webhooks/[0-9]+/[A-Za-z0-9_.-]+", target.path))
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            return UploadResult(False, "Enter a Discord HTTPS webhook URL")
         max_mb = float(self.cfg.get("uploads.discord.max_mb", 25))
 
         to_send = clip
@@ -46,15 +56,16 @@ class DiscordUploader(Uploader):
                     data={"content": caption},
                     files={"file": (to_send.name, f, "video/mp4")},
                     timeout=300,
+                    allow_redirects=False,
                 )
-        except Exception as e:
-            return UploadResult(False, str(e))
+        except (OSError, requests.RequestException):
+            return UploadResult(False, "Could not send the clip to Discord")
         finally:
             _cleanup(temp)
 
-        if r.ok:
+        if 200 <= r.status_code < 300:
             return UploadResult(True)
-        return UploadResult(False, f"HTTP {r.status_code}: {r.text[:120]}")
+        return UploadResult(False, f"Discord returned HTTP {r.status_code}")
 
 
 def _cleanup(p: Path | None) -> None:
