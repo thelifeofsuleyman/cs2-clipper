@@ -36,11 +36,14 @@ with all five kills, not five files.
 
 1. Download **AegisClipper-Setup.exe** from Releases and run it.
 2. The app opens as a desktop window with a quick **setup wizard**.
-3. The wizard does a system check (recorder + GPU + CS2), installs the CS2
-   integration with one click, lets you pick a quality preset, and connect
-   Telegram/Discord. Done.
+3. The wizard looks through your Steam libraries and installs the CS2
+   integration when you save setup. If the game was already open, restart it
+   so it loads the integration file. You can also connect a custom CS2
+   installation or test five seconds of capture from Settings.
 
-That's it — play CS2 and your highlights appear in the dashboard automatically.
+Open CS2 and wait for **Replay buffer ready** and **CS2 connected**. Highlights
+appear in your clip library after each streak. **Save replay** lets you check the
+buffer before your first highlight.
 **No OBS, no extra downloads** — the installer bundles everything (recorder,
 WebView2 runtime, ffmpeg).
 
@@ -78,9 +81,10 @@ Pick a preset in the wizard:
 | **High** | 1080p / 60 | gaming rigs |
 | **Native** | source / 60 | best quality, strongest PCs |
 
-If a hardware encoder (NVENC/AMF/QSV) is present, encoding is offloaded to the
-GPU for near-zero CPU cost. Otherwise a fast software encoder is used. Aegis only
-records while CS2 is running, so it costs nothing when you're not playing.
+Aegis tries supported hardware encoders and falls back to software or an alternate
+desktop capture method if FFmpeg cannot start. By default it keeps a rolling
+buffer while CS2 is running. The built-in recorder captures video. To include
+game audio, configure audio sources and Replay Buffer in OBS.
 
 ### Using OBS instead (optional)
 
@@ -214,7 +218,8 @@ them. Set `AEGIS_DATA_DIR` to relocate the state folder (handy for dev).
 
 | Symptom | Fix |
 | --- | --- |
-| No clips appearing | Click **Start Replay Buffer** in OBS before the round. The wizard's status row tells you if it's off. |
+| Waiting for game updates | In Settings, check the Counter-Strike 2 integration. Connect CS2 if needed, then restart the game and enter a match. |
+| Capture unavailable | Try **Test screen capture** in Settings and check Activity for the FFmpeg error. If using OBS, start its Replay Buffer. |
 | "OBS WebSocket not reachable" | OBS → Tools → WebSocket Server Settings → Enable. Restart OBS. |
 | "No new clip appeared" | The replay folder in Settings must match OBS's actual recording path. |
 | Discord upload fails on big clips | ffmpeg isn't available to shrink them — bundle/install it, or use Telegram. |

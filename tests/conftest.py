@@ -17,11 +17,12 @@ def cfg(data_dir):
 
 
 @pytest.fixture
-def app_client(cfg):
+def app_client(cfg, monkeypatch):
     """Flask test client wired to a fresh engine + catalog."""
     from aegis import web
     from aegis.clips import Catalog
     from aegis.engine import Engine
+    monkeypatch.setattr(web.config, "detect_cs2_cfg_dir", lambda: None)
     catalog = Catalog()
     engine = Engine(cfg, catalog)
     application = web.create_app(cfg, catalog, engine)

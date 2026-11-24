@@ -8,6 +8,7 @@ so the core clip→upload path never depends on ffmpeg being present.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -49,23 +50,35 @@ def resolve_ffmpeg(override: str = "") -> str | None:
     return shutil.which("ffmpeg")
 
 
-def _run(args: list[str]) -> subprocess.CompletedProcess:
+def _run(args: list[str], timeout: float = 120) -> subprocess.CompletedProcess:
     return subprocess.run(
-        args, capture_output=True, text=True, creationflags=_NO_WINDOW,
+        args, capture_output=True, text=True, errors="replace", timeout=timeout,
+        creationflags=_NO_WINDOW,
     )
 
 
 def probe_duration(ffmpeg: str, video: Path) -> float:
     """Duration in seconds via ffprobe (falls back to 0 on failure)."""
-    ffprobe = ffmpeg.replace("ffmpeg", "ffprobe")
-    if not Path(ffprobe).exists() and shutil.which("ffprobe"):
-        ffprobe = "ffprobe"
+    return stream_info(ffmpeg, video)[0]
+
+
+def stream_info(ffmpeg: str, video: Path) -> tuple[float, bool]:
+    ffprobe = Path(ffmpeg).with_name("ffprobe" + (".exe" if sys.platform == "win32" else ""))
+    probe = str(ffprobe) if ffprobe.is_file() else shutil.which("ffprobe")
     try:
-        r = _run([ffprobe, "-v", "quiet", "-print_format", "json",
-                  "-show_format", str(video)])
-        return float(json.loads(r.stdout)["format"]["duration"])
-    except Exception:
-        return 0.0
+        if probe:
+            r = _run([probe, "-v", "error", "-print_format", "json",
+                      "-show_format", "-show_streams", str(video)], timeout=8)
+            if r.returncode == 0:
+                info = json.loads(r.stdout)
+                duration = float(info.get("format", {}).get("duration", 0) or 0)
+                return duration, any(s.get("codec_type") == "audio" for s in info.get("streams", []))
+        r = _run([ffmpeg, "-hide_banner", "-i", str(video)], timeout=8)
+        stamp = re.search(r"Duration: (\d+):(\d+):([\d.]+)", r.stderr)
+        duration = (int(stamp[1]) * 3600 + int(stamp[2]) * 60 + float(stamp[3])) if stamp else 0.0
+        return duration, bool(re.search(r"Stream .*?: Audio:", r.stderr))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0, False
 
 
 def quality_encode_args(ffmpeg: str, cfg) -> list[str]:
@@ -107,14 +120,11 @@ def make_test_clip(ffmpeg: str | None, out_path: Path, seconds: int = 5) -> Path
     return out_path if (r.returncode == 0 and out_path.exists()) else None
 
 
-def _capture_once(ffmpeg: str, out_path: Path, seconds: int, cfg, method: str) -> bool:
+def _capture_once(ffmpeg: str, out_path: Path, seconds: int, cfg, method: str, encoder: str) -> bool:
     from . import recorder
     preset = cfg.get("recording.preset", "medium")
     w, h, fps, bitrate = recorder.PRESETS.get(preset, recorder.PRESETS["medium"])
     fps = int(cfg.get("recording.fps", fps) or fps)
-    encoder = recorder.pick_encoder(recorder._encoders_text(ffmpeg),
-                                    cfg.get("recording.encoder", "auto"))
-
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
     if method == "ddagrab":
         chain = f"ddagrab=output_idx=0:framerate={fps},hwdownload,format=bgra"
@@ -130,7 +140,11 @@ def _capture_once(ffmpeg: str, out_path: Path, seconds: int, cfg, method: str) -
     cmd += ["-t", str(seconds), "-movflags", "+faststart", str(out_path)]
 
     log(f"Screen capture test via {method} ({preset}, {encoder}, {seconds}s)")
-    r = _run(cmd)
+    try:
+        r = _run(cmd, timeout=seconds + 8)
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"Capture via {method} / {encoder} failed: {e}")
+        return False
     ok = r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1024
     if not ok:
         log(f"Capture via {method} failed: {(r.stderr or '')[-200:]}")
@@ -143,11 +157,11 @@ def capture_screen_test(ffmpeg: str | None, out_path: Path, seconds: int, cfg) -
     ('ddagrab'/'gdigrab') so the caller can remember it, or None if both failed."""
     if not ffmpeg:
         return None
-    pref = cfg.get("recording.capture", "ddagrab")
-    order = [pref] + [m for m in ("ddagrab", "gdigrab") if m != pref]
-    for method in order:
-        if _capture_once(ffmpeg, out_path, seconds, cfg, method):
+    from .recorder import capture_candidates
+    for method, encoder in capture_candidates(ffmpeg, cfg):
+        if _capture_once(ffmpeg, out_path, seconds, cfg, method, encoder):
             return method
+    out_path.unlink(missing_ok=True)
     return None
 
 
@@ -201,7 +215,7 @@ def build_montage(
 
     Re-encode-concat (not stream-copy) because clips may differ in resolution
     after Discord-fit passes. Optional background music replaces clip audio;
-    ``vertical`` produces a 1080x1920 blurred-pad mobile cut.
+    ``vertical`` produces a padded 1080x1920 mobile cut.
     """
     if not ffmpeg or not clips:
         return None
@@ -218,27 +232,45 @@ def build_montage(
     for c in clips:
         args += ["-i", str(c)]
     if music:
-        args += ["-i", str(music)]
+        args += ["-stream_loop", "-1", "-i", str(music)]
 
     n = len(clips)
     filt = "".join(
-        f"[{i}:v]{scale},setsar=1,fps=60[v{i}];" for i in range(n)
+        f"[{i}:v]{scale},setsar=1,fps=60,format=yuv420p,setpts=PTS-STARTPTS[v{i}];"
+        for i in range(n)
     )
     if music:
         filt += "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vout]"
         maps = ["-map", "[vout]", "-map", f"{n}:a", "-shortest"]
     else:
-        filt += "".join(f"[v{i}][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[vout][aout]"
-        maps = ["-map", "[vout]", "-map", "[aout]"]
+        streams = [stream_info(ffmpeg, c) for c in clips]
+        if any(audio for _, audio in streams):
+            for i, (duration, audio) in enumerate(streams):
+                if audio:
+                    filt += (f"[{i}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+                             f"asetpts=PTS-STARTPTS[a{i}];")
+                else:
+                    filt += f"anullsrc=r=48000:cl=stereo:d={max(.001, duration):.3f}[a{i}];"
+            filt += "".join(f"[v{i}][a{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=1[vout][aout]"
+            maps = ["-map", "[vout]", "-map", "[aout]"]
+        else:
+            filt += "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[vout]"
+            maps = ["-map", "[vout]"]
 
     venc = encode_args or ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
-    args += ["-filter_complex", filt, *maps, *venc,
-             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
-             str(out_path)]
-
     log(f"Building montage from {n} clip(s) -> {out_path.name}")
-    r = _run(args)
-    if r.returncode == 0 and out_path.exists():
-        return out_path
-    log(f"Montage build failed: {r.stderr[-300:] if r.stderr else 'unknown error'}")
+    base = [*args, "-filter_complex", filt, *maps]
+    options = [venc]
+    if "libx264" not in venc:
+        options.append(["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
+    for encoder in options:
+        try:
+            r = _run([*base, *encoder, "-c:a", "aac", "-b:a", "192k",
+                      "-movflags", "+faststart", str(out_path)], timeout=300)
+            if r.returncode == 0 and out_path.is_file() and out_path.stat().st_size > 0:
+                return out_path
+            log(f"Montage build failed ({encoder[1]}): {r.stderr[-300:]}")
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"Montage build failed ({encoder[1]}): {e}")
+    out_path.unlink(missing_ok=True)
     return None

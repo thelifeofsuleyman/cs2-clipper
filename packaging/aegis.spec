@@ -32,6 +32,9 @@ except Exception:
 # Vendored ffmpeg (optional) — placed next to the exe so resolve_ffmpeg() finds it.
 binaries = []
 vendor = os.path.join(ROOT, "packaging", "vendor")
+license_file = os.path.join(vendor, "ffmpeg-LICENSE.txt")
+if os.path.exists(license_file):
+    datas.append((license_file, "."))
 for exe in ("ffmpeg.exe", "ffprobe.exe"):
     p = os.path.join(vendor, exe)
     if os.path.exists(p):

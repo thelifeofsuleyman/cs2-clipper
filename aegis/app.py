@@ -26,18 +26,20 @@ from . import APP_NAME, config, paths
 from .clips import Catalog
 from .engine import Engine
 from .log import log
-from .web import create_app
+from .web import _find_gsi_dir, create_app, install_gsi
 
 WINDOW_W, WINDOW_H = 1180, 820
 
 
-def _serve(app, port: int) -> None:
+def _make_server(app, port: int):
     # Prefer waitress (a real WSGI server) if present; fall back to Flask's.
     try:
-        from waitress import serve
-        serve(app, host="127.0.0.1", port=port, threads=8, _quiet=True)
+        from waitress import create_server
+        server = create_server(app, host="127.0.0.1", port=port, threads=8)
+        return server.run
     except ImportError:
-        app.run(host="127.0.0.1", port=port, threaded=True, debug=False)
+        from werkzeug.serving import make_server
+        return make_server("127.0.0.1", port, app, threaded=True).serve_forever
 
 
 def _banner(cfg: config.Config, port: int) -> None:
@@ -85,27 +87,39 @@ class _WindowApi:
     """Exposed to the page's JS as window.pywebview.api so the in-page close
     dialog can drive the NATIVE window: background (hide, reopen from tray) or
     quit (stop engine + exit)."""
-    def __init__(self, engine):
-        self.engine = engine
-        self.window = None
+    def __init__(self):
+        self._window = None
+        self._closing = threading.Event()
 
     def background(self):
         try:
-            self.window.hide()
+            self._window.hide()
             log("Hidden to background — engine still clipping; reopen from the tray.")
         except Exception:
             pass
 
     def quit(self):
+        self._closing.set()
+        self._window.destroy()
+
+    def _choose_close(self, tray_available: bool) -> None:
+        # WebView2 completes ExecuteScriptAsync on the WinForms UI thread.
+        # Calling evaluate_js in the synchronous closing handler freezes it.
         try:
-            self.engine.stop_recording()
-        except Exception:
-            pass
-        import os
-        os._exit(0)
+            shown = self._window.evaluate_js(
+                f"typeof window.__exitChoice === 'function' && window.__exitChoice({str(tray_available).lower()})"
+            )
+            if shown:
+                return
+        except Exception as e:
+            log(f"Could not show the close dialog: {e}")
+        if tray_available:
+            self.background()
+        else:
+            self.quit()
 
 
-def _run_window(cfg, engine, port: int, landing: str) -> bool:
+def _run_window(cfg, port: int, landing: str) -> bool:
     """Show the dashboard in a TRUE native window via pywebview, with native
     title-bar behavior: minimize -> background (engine keeps running), and the
     native X -> the in-page "background or quit" dialog. Returns False (logging
@@ -118,28 +132,31 @@ def _run_window(cfg, engine, port: int, landing: str) -> bool:
 
     url = f"http://127.0.0.1:{port}{landing}"
     try:
-        api = _WindowApi(engine)
+        api = _WindowApi()
         window = webview.create_window(
             APP_NAME, url, js_api=api, width=WINDOW_W, height=WINDOW_H,
-            min_size=(900, 600),
+            min_size=(560, 460),
         )
-        api.window = window
-        _start_tray_for_window(window, cfg, port)
+        api._window = window
+        tray = _start_tray_for_window(window, cfg, api.quit)
 
         # Native X: don't close — show the in-page choice dialog and cancel.
         def _on_closing():
-            try:
-                window.evaluate_js("window.__exitChoice && window.__exitChoice()")
-                return False   # cancel the native close; the dialog decides
-            except Exception:
-                return True    # if we can't show the dialog, allow a normal close
+            if api._closing.is_set():
+                return True
+            threading.Thread(target=api._choose_close, args=(tray is not None,), daemon=True).start()
+            return False
 
         try:
             window.events.closing += _on_closing
         except Exception:
             pass
 
-        webview.start()  # blocks until the app exits
+        try:
+            webview.start()  # blocks until the app exits
+        finally:
+            if tray:
+                tray.stop()
         return True
     except Exception as e:
         log(f"Native window failed to start ({e}); using app-mode window")
@@ -202,7 +219,7 @@ def _open_app_mode(url: str) -> bool:
         return False
 
 
-def _start_tray_for_window(window, cfg, port: int):
+def _start_tray_for_window(window, cfg, quit_window):
     """Detached tray icon that can reopen or quit the window. None if unavailable."""
     try:
         import pystray
@@ -216,12 +233,7 @@ def _start_tray_for_window(window, cfg, port: int):
             log(f"Could not show window: {e}")
 
     def _quit(icon, item):
-        icon.stop()
-        try:
-            window.destroy()
-        except Exception:
-            import os
-            os._exit(0)
+        quit_window()
 
     icon = pystray.Icon(
         "aegis", _tray_image(), APP_NAME,
@@ -320,14 +332,32 @@ def main(argv: list[str] | None = None) -> int:
     engine = Engine(cfg, catalog)
     app = create_app(cfg, catalog, engine)
 
+    try:
+        serve = _make_server(app, port)
+    except (OSError, SystemExit) as e:
+        message = f"Aegis could not open its local dashboard on port {port}. Close the conflicting app and try again."
+        log(f"{message} ({e})")
+        if not headless and sys.platform == "win32":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, message, APP_NAME, 0x10)
+        return 1
     _banner(cfg, port)
-    threading.Thread(target=_serve, args=(app, port), daemon=True).start()
+    threading.Thread(target=serve, daemon=True).start()
 
     # Start the recording backend unless the user is still in the setup wizard
     # (no point capturing until they've chosen quality/backend). The built-in
     # recorder self-gates on the game running, so this is cheap to leave on.
     if not cfg.get("first_run"):
         engine.start_recording()
+        # Upgraded installs may have skipped integration during earlier setup.
+        # Only touch the Aegis-owned file in the detected or saved Steam folder.
+        if "--port" not in argv:
+            dest = _find_gsi_dir(cfg)
+            if dest:
+                try:
+                    install_gsi(cfg, dest)
+                except OSError as e:
+                    log(f"Could not install CS2 integration: {e}")
 
     landing = "/setup" if cfg.get("first_run") else "/"
 
@@ -343,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
     # Prefer a true native window (pywebview). If that can't load, open a
     # chromeless app-mode browser window (still looks like an app); only as a
     # last resort use a normal browser tab. A tray icon runs alongside either way.
-    if not _run_window(cfg, engine, port, landing):
+    if not _run_window(cfg, port, landing):
         url = f"http://127.0.0.1:{port}{landing}"
         if not _open_app_mode(url):
             threading.Timer(1.0, lambda: webbrowser.open(url)).start()

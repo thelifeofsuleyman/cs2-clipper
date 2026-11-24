@@ -26,6 +26,7 @@ import math
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -67,6 +68,20 @@ def pick_encoder(encoders_text: str, preference: str = "auto") -> str:
             if enc in avail:
                 return enc
     return "libx264"
+
+
+def capture_candidates(ffmpeg: str, cfg: Config) -> list[tuple[str, str]]:
+    encoders = _encoders_text(ffmpeg)
+    preference = cfg.get("recording.encoder", "auto")
+    primary = pick_encoder(encoders, preference)
+    choices = [primary]
+    if preference != "x264":
+        choices.extend(e for e in _HW_ENCODERS if e in encoders and e != primary)
+    if "libx264" not in choices:
+        choices.append("libx264")
+    method = cfg.get("recording.capture", "ddagrab")
+    methods = ("gdigrab", "ddagrab") if method == "gdigrab" else ("ddagrab", "gdigrab")
+    return [(method, encoder) for method in methods for encoder in choices]
 
 
 def _encoder_args(encoder: str, bitrate: str) -> list[str]:
@@ -119,6 +134,8 @@ def build_capture_cmd(
 
     cmd += _encoder_args(encoder, bitrate)
     cmd += [
+        "-g", str(fps * segment_time),
+        "-force_key_frames", f"expr:gte(t,n_forced*{segment_time})",
         "-f", "segment",
         "-segment_time", str(segment_time),
         "-segment_wrap", str(segment_wrap),
@@ -173,6 +190,11 @@ class BuiltinRecorder(Recorder):
         self._supervisor: threading.Thread | None = None
         self._stop = threading.Event()
         self._encoder = "?"
+        self._method = ""
+        self._stage = "idle"
+        self._detail = ""
+        self._stderr = None
+        self._spawned_at = 0.0
         # Each recorder instance gets its OWN buffer dir. If a config change spins
         # up a new recorder, its ffmpeg can't collide with a lingering old one's
         # segment files, and an in-flight save() reads from a stable directory.
@@ -184,6 +206,7 @@ class BuiltinRecorder(Recorder):
         if self._supervisor and self._supervisor.is_alive():
             return
         self._stop.clear()
+        self._bdir.mkdir(parents=True, exist_ok=True)
         self._supervisor = threading.Thread(target=self._run, daemon=True)
         self._supervisor.start()
 
@@ -209,27 +232,58 @@ class BuiltinRecorder(Recorder):
         the thread silently."""
         gate = bool(self.cfg.get("recording.only_when_game_running", True))
         game = self.cfg.get("recording.game_process", "cs2.exe")
+        segment_time = max(1, int(self.cfg.get("recording.segment_time", 2)))
+        choices: list[tuple[str, str]] = []
+        next_choice = 0
         while not self._stop.is_set():
             try:
                 want = (not gate) or _process_running(game)
                 with self._lock:
-                    running = self._proc is not None and self._proc.poll() is None
-                if want and not running:
-                    self._spawn()
-                elif not want and running:
+                    proc = self._proc
+                if not want:
                     self._kill_proc()
+                    choices = []
+                    next_choice = 0
+                    self._stage = "waiting_game"
+                    self._detail = ""
+                else:
+                    if proc is not None:
+                        if proc.poll() is not None:
+                            self._capture_failed(f"FFmpeg exited ({proc.returncode})")
+                        elif self._stage == "starting":
+                            if len(list(self._bdir.glob("seg_*.ts"))) > 1:
+                                self._stage = "ready"
+                                self._detail = ""
+                                log(f"Replay buffer ready ({self._method}, {self._encoder})")
+                            elif time.monotonic() - self._spawned_at > max(10, segment_time * 3):
+                                self._capture_failed("FFmpeg produced no completed replay segment")
+                    if self._proc is None:
+                        ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
+                        if not ffmpeg:
+                            self._stage = "error"
+                            self._detail = "FFmpeg not found. Use the Windows installer or set ffmpeg_path."
+                            self._stop.wait(8)
+                            continue
+                        if not choices:
+                            choices = capture_candidates(ffmpeg, self.cfg)
+                        if next_choice >= len(choices):
+                            next_choice = 0
+                            self._stage = "error"
+                            self._stop.wait(12)
+                            continue
+                        method, encoder = choices[next_choice]
+                        next_choice += 1
+                        self._spawn(ffmpeg, method, encoder, segment_time)
             except Exception as e:
+                self._stage = "error"
+                self._detail = str(e)
                 log(f"Built-in recorder supervisor error: {e}")
-            self._stop.wait(3.0)
+            self._stop.wait(2.0)
         self._kill_proc()  # ensure ffmpeg is gone when the loop exits
+        self._stage = "idle"
 
-    def _spawn(self) -> None:
+    def _spawn(self, ffmpeg: str, method: str, encoder: str, seg_time: int) -> None:
         if self._stop.is_set():        # bail if a stop raced in
-            return
-        ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
-        if not ffmpeg:
-            log("Built-in recorder: ffmpeg not found — cannot capture")
-            self._stop.wait(10.0)
             return
 
         bdir = self._bdir
@@ -242,37 +296,51 @@ class BuiltinRecorder(Recorder):
         preset = self.cfg.get("recording.preset", "medium")
         w, h, fps, bitrate = PRESETS.get(preset, PRESETS["medium"])
         fps = int(self.cfg.get("recording.fps", fps) or fps)
-        self._encoder = pick_encoder(_encoders_text(ffmpeg),
-                                     self.cfg.get("recording.encoder", "auto"))
-        seg_time = int(self.cfg.get("recording.segment_time", 2))
-        buffer_secs = int(self.cfg.get("recording.buffer_seconds", 45))
+        buffer_secs = max(int(self.cfg.get("recording.buffer_seconds", 45)),
+                          math.ceil(float(self.cfg.get("recording.clip_seconds", 30))))
         wrap = max(4, math.ceil(buffer_secs / seg_time) + 2)
-        use_dda = self.cfg.get("recording.capture", "ddagrab") != "gdigrab"
 
         cmd = build_capture_cmd(
-            ffmpeg, bdir, width=w, height=h, fps=fps, encoder=self._encoder,
-            bitrate=bitrate, segment_time=seg_time, segment_wrap=wrap, use_ddagrab=use_dda,
+            ffmpeg, bdir, width=w, height=h, fps=fps, encoder=encoder,
+            bitrate=bitrate, segment_time=seg_time, segment_wrap=wrap, use_ddagrab=method == "ddagrab",
         )
-        log(f"Built-in recorder starting ({preset}, {self._encoder}, {fps}fps)")
+        self._method, self._encoder = method, encoder
+        self._stage = "starting"
+        log(f"Built-in recorder starting ({method}, {encoder}, {fps}fps)")
         try:
             with self._lock:
-                self._proc = subprocess.Popen(
-                    cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                if self._stop.is_set():
+                    return
+                self._stderr = tempfile.TemporaryFile()
+                proc = self._proc = subprocess.Popen(
+                    cmd, stdout=subprocess.DEVNULL, stderr=self._stderr,
                     creationflags=_NO_WINDOW,
                 )
+                self._spawned_at = time.monotonic()
             # Ensure this ffmpeg dies if the app crashes / is killed / self-updates,
             # so it can't keep recording or lock the bundled ffmpeg.exe.
             from . import winjob
-            winjob.guard(self._proc)
+            winjob.guard(proc)
         except Exception as e:
-            log(f"Built-in recorder failed to start: {e}")
-            self._proc = None
-            self._stop.wait(10.0)
+            self._capture_failed(str(e))
+
+    def _capture_failed(self, reason: str) -> None:
+        with self._lock:
+            err = self._stderr
+            if err:
+                err.seek(max(0, err.seek(0, 2) - 1500))
+                lines = err.read().decode(errors="replace").strip().splitlines()
+                if lines:
+                    reason = " | ".join(lines[-3:])[:350]
+        self._detail = reason
+        log(f"Capture failed ({self._method}, {self._encoder}): {reason}")
+        self._kill_proc()
 
     def _kill_proc(self) -> None:
         with self._lock:
             p = self._proc
             self._proc = None
+            err, self._stderr = self._stderr, None
         if p and p.poll() is None:
             try:
                 p.terminate()
@@ -280,8 +348,11 @@ class BuiltinRecorder(Recorder):
                     p.wait(timeout=3)
                 except subprocess.TimeoutExpired:
                     p.kill()
+                    p.wait(timeout=3)
             except Exception:
                 pass
+        if err:
+            err.close()
 
     # -- save --
     def save(self, seconds: float, out_path: Path) -> Path | None:
@@ -296,33 +367,56 @@ class BuiltinRecorder(Recorder):
 
         seg_time = int(self.cfg.get("recording.segment_time", 2))
         bdir = self._bdir
-        # Let the in-progress segment flush so the kill moment is on disk.
-        time.sleep(min(seg_time, 2))
-        entries = [(p, p.stat().st_mtime) for p in bdir.glob("seg_*.ts") if p.stat().st_size > 0]
+        # Debounce has already allowed post-roll. Wait for the current segment
+        # only while the buffer is warming up.
+        if len(list(bdir.glob("seg_*.ts"))) < 2:
+            self._stop.wait(min(seg_time, 2))
+        entries = []
+        for p in bdir.glob("seg_*.ts"):
+            try:
+                st = p.stat()
+                entries.append((p, st.st_mtime))
+            except FileNotFoundError:
+                continue
+        if len(entries) < 2:
+            return None
         segs = pick_segments(entries, seconds, seg_time)
         if not segs:
             log("Built-in recorder: no buffer segments to assemble")
             return None
 
-        listfile = bdir / "concat.txt"
-        listfile.write_text("".join(f"file '{p.as_posix()}'\n" for p in segs), encoding="utf-8")
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-               "-f", "concat", "-safe", "0", "-i", str(listfile),
-               "-c", "copy", "-movflags", "+faststart", str(out_path)]
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_NO_WINDOW)
+            with tempfile.TemporaryDirectory(prefix="save_", dir=bdir) as snapshot:
+                temp = Path(snapshot)
+                names = []
+                for i, segment in enumerate(segs):
+                    name = f"clip_{i:03d}.ts"
+                    shutil.copyfile(segment, temp / name)
+                    names.append(name)
+                listfile = temp / "concat.txt"
+                listfile.write_text("".join(f"file '{name}'\n" for name in names), encoding="utf-8")
+                cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                       "-f", "concat", "-safe", "1", "-i", str(listfile),
+                       "-c", "copy", "-movflags", "+faststart", str(out_path)]
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=20,
+                                   creationflags=_NO_WINDOW)
         except Exception as e:
             log(f"Built-in recorder concat failed: {e}")
+            out_path.unlink(missing_ok=True)
             return None
         if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
             return out_path
         log(f"Built-in recorder save failed: {(r.stderr or '')[-200:]}")
+        out_path.unlink(missing_ok=True)
         return None
 
     def status(self) -> dict:
-        running = self._proc is not None and self._proc.poll() is None
-        return {"backend": "builtin", "capturing": running, "encoder": self._encoder}
+        with self._lock:
+            proc = self._proc
+        ready = self._stage == "ready" and proc is not None and proc.poll() is None
+        return {"backend": "builtin", "capturing": ready, "encoder": self._encoder,
+                "method": self._method, "state": self._stage, "detail": self._detail}
 
 
 # ───────── OBS backend (optional) ─────────
@@ -354,7 +448,7 @@ class ObsRecorder(Recorder):
 def _encoders_text(ffmpeg: str) -> str:
     try:
         r = subprocess.run([ffmpeg, "-hide_banner", "-encoders"],
-                          capture_output=True, text=True, creationflags=_NO_WINDOW)
+                          capture_output=True, text=True, timeout=5, creationflags=_NO_WINDOW)
         return r.stdout or ""
     except Exception:
         return ""
@@ -366,7 +460,7 @@ def _process_running(name: str) -> bool:
         return True  # don't gate on non-Windows dev machines
     try:
         r = subprocess.run(["tasklist", "/fi", f"imagename eq {name}", "/nh"],
-                          capture_output=True, text=True, creationflags=_NO_WINDOW)
+                          capture_output=True, text=True, timeout=5, creationflags=_NO_WINDOW)
         return name.lower() in (r.stdout or "").lower()
     except Exception:
         return True

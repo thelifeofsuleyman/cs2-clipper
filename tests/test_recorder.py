@@ -56,6 +56,15 @@ def test_build_capture_cmd_ddagrab_nvenc():
     assert "ddagrab" in joined and "scale=1280:720" in joined
     assert "h264_nvenc" in cmd
     assert cmd[cmd.index("-segment_wrap") + 1] == "25"
+    assert cmd[cmd.index("-force_key_frames") + 1] == "expr:gte(t,n_forced*2)"
+
+
+def test_capture_candidates_fall_back_to_software_and_other_input(cfg, monkeypatch):
+    monkeypatch.setattr(recorder, "_encoders_text", lambda _: "h264_nvenc\nh264_qsv\nlibx264")
+    assert recorder.capture_candidates("ffmpeg", cfg) == [
+        ("ddagrab", "h264_nvenc"), ("ddagrab", "h264_qsv"), ("ddagrab", "libx264"),
+        ("gdigrab", "h264_nvenc"), ("gdigrab", "h264_qsv"), ("gdigrab", "libx264"),
+    ]
 
 
 def test_build_capture_cmd_gdigrab_fallback_source_res():

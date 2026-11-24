@@ -67,7 +67,10 @@ def _get_job():
         return None
     try:
         k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
         k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.SetInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
         job = k32.CreateJobObjectW(None, None)
         if not job:
             return None
@@ -77,7 +80,9 @@ def _get_job():
             job, _JobObjectExtendedLimitInformation,
             ctypes.byref(info), ctypes.sizeof(info))
         if not ok:
-            return None
+            error = ctypes.WinError(ctypes.get_last_error())
+            k32.CloseHandle(job)
+            raise error
         _job = job
         return _job
     except Exception as e:
@@ -92,6 +97,8 @@ def guard(proc) -> None:
         return
     try:
         k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.AssignProcessToJobObject(job, int(proc._handle))
+        k32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+        if not k32.AssignProcessToJobObject(job, int(proc._handle)):
+            raise ctypes.WinError(ctypes.get_last_error())
     except Exception as e:
         log(f"Could not guard child process: {e}")

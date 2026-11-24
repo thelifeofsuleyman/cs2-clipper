@@ -104,6 +104,23 @@ def test_finish_setup_flips_first_run(app_client):
     assert cfg.get("first_run") is False
 
 
+def test_finish_setup_installs_detected_cs2_integration_once(app_client, monkeypatch, tmp_path):
+    from aegis import web
+
+    client, cfg, _, engine = app_client
+    cfg.set("engine.gsi_port", 3501)
+    monkeypatch.setattr(web.config, "detect_cs2_cfg_dir", lambda: tmp_path)
+    starts = []
+    monkeypatch.setattr(engine, "restart_recording", lambda: starts.append(True))
+    first = client.post("/api/finish-setup").get_json()
+    second = client.post("/api/finish-setup").get_json()
+    installed = tmp_path / web._GSI_FILENAME
+    assert first["restart_required"] and second["ok"]
+    assert '"http://127.0.0.1:3501"' in installed.read_text(encoding="utf-8")
+    assert client.get("/api/detect").get_json()["gsi_installed"]
+    assert starts == [True]
+
+
 def test_update_check_endpoint(app_client):
     client, cfg, *_ = app_client
     cfg.set("update.repo", "OWNER/REPO")        # placeholder -> no network, no update

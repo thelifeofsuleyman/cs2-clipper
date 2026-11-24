@@ -59,6 +59,28 @@ def test_kill_count_decrease_resets(cfg):
     assert eng.status()["pending_kills"] == 0
 
 
+def test_partial_gsi_and_spectator_updates_preserve_local_streak(cfg):
+    cfg.set("engine.debounce_sec", 999)
+    eng = Engine(cfg, Catalog())
+    local = _gsi(5)
+    local["provider"] = {"steamid": "1"}
+    local["player"]["steamid"] = "1"
+    eng.handle_payload(local)
+    local["player"]["match_stats"]["kills"] = 6
+    eng.handle_payload(local)
+
+    eng.handle_payload({"provider": {"steamid": "1"}})
+    spectator = _gsi(15)
+    spectator["provider"] = {"steamid": "1"}
+    spectator["player"]["steamid"] = "2"
+    eng.handle_payload(spectator)
+    eng.handle_payload(local)
+
+    assert eng.status()["gsi_connected"] is True
+    assert eng.status()["pending_kills"] == 1
+    eng._timer.cancel()
+
+
 # ───────── debounce -> save -> catalog -> fan-out ─────────
 def test_streak_saves_and_catalogs(cfg):
     cfg.set("engine.debounce_sec", 0.1)

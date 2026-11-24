@@ -31,6 +31,7 @@ DEFAULTS: dict[str, Any] = {
         "min_kills": 1,          # 2 = skip solo kills
         "clip_wait_sec": 8.0,    # how long to wait for OBS to finish writing
         "gsi_port": 3000,        # CS2 GSI POST target (matches the .cfg)
+        "cs2_cfg_dir": "",       # optional override for custom Steam installs
     },
     "recording": {
         "backend": "builtin",          # "builtin" (no OBS) | "obs"

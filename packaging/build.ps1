@@ -46,14 +46,28 @@ if ($Ffmpeg) {
         # BtbN's GitHub release builds are CI-friendly (gyan.dev rate-limits runners).
         $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
         Write-Host "Downloading ffmpeg (BtbN win64-gpl)..." -ForegroundColor Cyan
-        $zip = "$env:TEMP\ffmpeg.zip"
-        Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
-        Expand-Archive $zip "$env:TEMP\ffmpeg" -Force
-        $bin = Get-ChildItem "$env:TEMP\ffmpeg" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-        if (-not $bin) { throw "ffmpeg.exe not found in download" }
-        Copy-Item $bin.FullName "$vendor\ffmpeg.exe"
-        Copy-Item (Join-Path $bin.DirectoryName "ffprobe.exe") "$vendor\ffprobe.exe"
-        Remove-Item $zip, "$env:TEMP\ffmpeg" -Recurse -Force
+        $vendorRoot = (Resolve-Path -LiteralPath $vendor).Path
+        $scratch = Join-Path $vendorRoot ("download-" + [Guid]::NewGuid())
+        New-Item -ItemType Directory -Path $scratch | Out-Null
+        try {
+            $zip = Join-Path $scratch "ffmpeg.zip"
+            $unpacked = Join-Path $scratch "unpacked"
+            Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
+            Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
+            $bin = Get-ChildItem $unpacked -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+            if (-not $bin) { throw "ffmpeg.exe not found in download" }
+            Copy-Item $bin.FullName "$vendor\ffmpeg.exe"
+            Copy-Item (Join-Path $bin.DirectoryName "ffprobe.exe") "$vendor\ffprobe.exe"
+            $license = Join-Path (Split-Path -Parent $bin.DirectoryName) "LICENSE.txt"
+            if (Test-Path -LiteralPath $license) {
+                Copy-Item -LiteralPath $license -Destination "$vendor\ffmpeg-LICENSE.txt"
+            }
+        } finally {
+            $resolvedScratch = (Resolve-Path -LiteralPath $scratch).Path
+            if ((Split-Path -Parent $resolvedScratch) -eq $vendorRoot) {
+                Remove-Item -LiteralPath $resolvedScratch -Recurse -Force
+            }
+        }
     }
     if (-not (Test-Path "$vendor\ffmpeg.exe")) { throw "ffmpeg vendoring failed" }
     Write-Host "ffmpeg vendored." -ForegroundColor Green
@@ -100,10 +114,11 @@ if ($Installer) {
         "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $iscc) {
-        Write-Warning "Inno Setup not found. Install it from https://jrsoftware.org/isinfo.php then re-run with -Installer, or open packaging\aegis.iss in the Inno compiler."
+        throw "Inno Setup not found. Install it from https://jrsoftware.org/isinfo.php then re-run with -Installer."
     } else {
         Write-Host "Compiling installer with Inno Setup..." -ForegroundColor Cyan
         & $iscc "/DAppVersion=$AppVersion" "packaging\aegis.iss"
+        if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed (exit $LASTEXITCODE)" }
         Write-Host "Installer built -> packaging\Output\AegisClipper-Setup.exe" -ForegroundColor Green
     }
 }

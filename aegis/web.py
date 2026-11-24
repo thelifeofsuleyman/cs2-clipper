@@ -10,7 +10,7 @@ there are no template/static files to locate after PyInstaller freezes the app.
 """
 from __future__ import annotations
 
-import shutil
+import threading
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, redirect, request, send_file
@@ -25,6 +25,18 @@ from .pages import DASHBOARD_HTML, SETUP_HTML
 
 def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     app = Flask(__name__)
+    media_job = threading.Lock()
+
+    def run_media_job(run):
+        if not media_job.acquire(blocking=False):
+            return jsonify(ok=False, error="Another video operation is still running."), 409
+        try:
+            return run()
+        except Exception as e:
+            log(f"Video operation failed: {e}")
+            return jsonify(ok=False, error="Video operation failed. See Activity for details."), 500
+        finally:
+            media_job.release()
 
     # ───────── GSI ingest (CS2 POSTs here) ─────────
     @app.post("/")
@@ -44,7 +56,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     def dashboard():
         if cfg.get("first_run"):
             return redirect("/setup")
-        return DASHBOARD_HTML.replace("%VER%", __version__)
+        return (DASHBOARD_HTML.replace("%VER%", __version__)
+                .replace("%AUTO_UPDATE%", "true" if cfg.get("update.auto_check") else "false"))
 
     @app.get("/setup")
     def setup():
@@ -82,7 +95,16 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
     @app.post("/api/clips/<clip_id>")
     def api_update_clip(clip_id: str):
-        body = request.get_json(silent=True) or {}
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify(error="Provide clip changes as a JSON object."), 400
+        if "title" in body and (not isinstance(body["title"], str) or len(body["title"]) > 240):
+            return jsonify(error="Clip titles can be up to 240 characters."), 400
+        if "favorite" in body and not isinstance(body["favorite"], bool):
+            return jsonify(error="Favorite must be true or false."), 400
+        if "tags" in body and (not isinstance(body["tags"], list)
+                               or not all(isinstance(tag, str) for tag in body["tags"])):
+            return jsonify(error="Tags must be a list of text labels."), 400
         allowed = {k: body[k] for k in ("title", "tags", "favorite") if k in body}
         c = catalog.update(clip_id, **allowed)
         return (jsonify(_clip_json(c)) if c else (jsonify(error="not found"), 404))
@@ -122,11 +144,19 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     # ───────── montage ─────────
     @app.post("/api/montage")
     def api_montage():
-        ids = (request.get_json(silent=True) or {}).get("clip_ids", [])
-        out = engine.build_montage(ids)
-        if out is None:
-            return jsonify(error="montage failed (need ffmpeg + valid clips)"), 400
-        return jsonify(ok=True, file=out.name)
+        body = request.get_json(silent=True)
+        ids = body.get("clip_ids") if isinstance(body, dict) else None
+        limit = int(cfg.get("montage.max_clips", 12))
+        if not isinstance(ids, list) or not 1 <= len(ids) <= limit or not all(isinstance(i, str) for i in ids):
+            return jsonify(error=f"Select between 1 and {limit} available clips."), 400
+
+        def build():
+            out = engine.build_montage(ids)
+            if out is None:
+                return jsonify(error="Could not build the montage. Check your clips and the Activity log."), 400
+            return jsonify(ok=True, file=out.name)
+
+        return run_media_job(build)
 
     @app.get("/api/montages")
     def api_montages():
@@ -147,7 +177,12 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     @app.post("/api/config")
     def api_set_config():
         import json as _json
-        patch = request.get_json(silent=True) or {}
+        patch = request.get_json(silent=True)
+        if not isinstance(patch, dict) or any(
+            group in patch and not isinstance(patch[group], dict)
+            for group in ("recording", "engine", "obs", "uploads", "polish", "montage", "update")
+        ):
+            return jsonify(error="Provide settings as a JSON object with settings groups."), 400
         before = _json.dumps(cfg.get("recording"), sort_keys=True)
         cfg.update(patch)
         cfg.save()
@@ -162,7 +197,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     @app.get("/api/detect")
     def api_detect():
         from . import media, recorder
-        cs2 = config.detect_cs2_cfg_dir()
+        cs2 = _find_gsi_dir(cfg)
         ffmpeg = media.resolve_ffmpeg(cfg.get("ffmpeg_path", ""))
         encoder, gpu = "", False
         if ffmpeg:
@@ -171,6 +206,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
             gpu = encoder != "libx264"
         return jsonify(
             cs2_cfg_dir=str(cs2) if cs2 else "",
+            gsi_installed=bool(cs2 and _gsi_is_current(cs2, int(cfg.get("engine.gsi_port")))),
             ffmpeg=ffmpeg or "",
             encoder=encoder,
             gpu_accel=gpu,
@@ -180,32 +216,51 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     @app.post("/api/install-gsi")
     def api_install_gsi():
         """Copy the GSI .cfg into CS2's cfg folder so detection 'just works'."""
-        target_dir = (request.get_json(silent=True) or {}).get("cs2_cfg_dir", "")
-        dest_dir = Path(target_dir) if target_dir else config.detect_cs2_cfg_dir()
+        body = request.get_json(silent=True)
+        target_dir = body.get("cs2_cfg_dir", "") if isinstance(body, dict) else ""
+        if not isinstance(target_dir, str):
+            return jsonify(error="Enter a CS2 cfg folder path."), 400
+        dest_dir = Path(target_dir) if target_dir else _find_gsi_dir(cfg)
         if not dest_dir or not dest_dir.is_dir():
             return jsonify(error="CS2 cfg folder not found — set it manually"), 400
-        src = Path(__file__).resolve().parent.parent / "cfg" / "gamestate_integration_aegis_clipper.cfg"
         try:
-            written = _write_gsi_cfg(src, dest_dir, int(cfg.get("engine.gsi_port")))
+            written, changed = install_gsi(cfg, dest_dir)
+            if target_dir and str(dest_dir) != cfg.get("engine.cs2_cfg_dir"):
+                cfg.set("engine.cs2_cfg_dir", str(dest_dir))
+                cfg.save()
         except Exception as e:
             return jsonify(error=str(e)), 500
-        log(f"Installed GSI config to {written}")
-        return jsonify(ok=True, path=str(written))
+        return jsonify(ok=True, path=str(written), restart_required=changed)
 
     @app.post("/api/test-clip")
     def api_test_clip():
-        return jsonify(engine.trigger_test_clip())
+        return run_media_job(lambda: jsonify(engine.trigger_test_clip()))
 
     @app.post("/api/capture-test")
     def api_capture_test():
-        return jsonify(engine.trigger_capture_test())
+        return run_media_job(lambda: jsonify(engine.trigger_capture_test()))
+
+    @app.post("/api/replay")
+    def api_save_replay():
+        return run_media_job(lambda: jsonify(engine.save_replay()))
 
     @app.post("/api/finish-setup")
     def api_finish_setup():
+        if not cfg.get("first_run"):
+            return jsonify(ok=True)
+        dest = _find_gsi_dir(cfg)
+        restart_required = False
+        warning = ""
+        if dest and not _gsi_is_current(dest, int(cfg.get("engine.gsi_port"))):
+            try:
+                _, restart_required = install_gsi(cfg, dest)
+            except OSError as e:
+                warning = f"Could not connect CS2: {e}"
+                log(warning)
         cfg.set("first_run", False)
         cfg.save()
         engine.restart_recording()  # begin capturing now that setup is done
-        return jsonify(ok=True)
+        return jsonify(ok=True, restart_required=restart_required, warning=warning)
 
     # ───────── auto-update ─────────
     @app.get("/api/update/check")
@@ -245,9 +300,37 @@ def _clip_json(c) -> dict:
     }
 
 
+_GSI_FILENAME = "gamestate_integration_aegis_clipper.cfg"
+
+
+def _find_gsi_dir(cfg: Config) -> Path | None:
+    stored = cfg.get("engine.cs2_cfg_dir", "")
+    if stored and Path(stored).is_dir():
+        return Path(stored)
+    return config.detect_cs2_cfg_dir()
+
+
+def _gsi_is_current(directory: Path, port: int) -> bool:
+    try:
+        text = (directory / _GSI_FILENAME).read_text(encoding="utf-8")
+        return f'"http://127.0.0.1:{port}"' in text
+    except (OSError, UnicodeError):
+        return False
+
+
+def install_gsi(cfg: Config, directory: Path) -> tuple[Path, bool]:
+    port = int(cfg.get("engine.gsi_port"))
+    if _gsi_is_current(directory, port):
+        return directory / _GSI_FILENAME, False
+    src = Path(__file__).resolve().parent.parent / "cfg" / _GSI_FILENAME
+    written = _write_gsi_cfg(src, directory, port)
+    log(f"Installed CS2 integration to {written}")
+    return written, True
+
+
 def _write_gsi_cfg(src: Path, dest_dir: Path, port: int) -> Path:
     """Copy the template cfg, rewriting its uri to the configured GSI port."""
-    dest = dest_dir / "gamestate_integration_aegis_clipper.cfg"
+    dest = dest_dir / _GSI_FILENAME
     if src.exists():
         text = src.read_text(encoding="utf-8")
     else:
