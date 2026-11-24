@@ -6,48 +6,41 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
 
-**Automatic CS2 highlight clipper — local-first, like allstar.gg but it all runs
-on your PC.** Detects your kill streaks live, records the moment with its own
-**built-in lightweight recorder (no OBS needed)**, catalogs every clip in a
-built-in web dashboard, and (optionally) fans them out to Telegram, Discord, or
-YouTube. Build montages from your best plays with one click. No cloud account, no
-subscription — kill detection reads CS2's official Game State Integration, so
-it's anti-cheat safe.
+**Aegis Clipper automatically saves CS2 highlights on your Windows PC.** The
+built-in recorder keeps a rolling replay buffer and saves a clip when your kill
+streak ends. Browse, play, and organize clips in the desktop app.
 
-```
-CS2 kill streak ──► built-in recorder (rolling buffer) ──► local library + dashboard
-   (GSI)            GPU encode if available, else light SW    └─► Telegram / Discord / YouTube
-                                                              └─► one-click montage
-```
+## Download for Windows
 
-**No OBS required.** Aegis keeps a short rolling replay buffer with bundled
-ffmpeg, using your GPU encoder (NVENC/AMF/QSV) when present — near-zero cost
-while you play — and a low-CPU software fallback on weak machines. It records
-only while CS2 is open, so it's light. (Prefer OBS for max quality? It's still
-supported as an optional backend.)
+**[Download the Windows installer](https://github.com/thelifeofsuleyman/cs2-clipper/releases/latest/download/AegisClipper-Setup.exe)** ·
+[Portable ZIP](https://github.com/thelifeofsuleyman/cs2-clipper/releases/latest/download/AegisClipper-portable.zip) ·
+[Release notes](https://github.com/thelifeofsuleyman/cs2-clipper/releases/latest)
 
-**Smart bundling:** each kill resets a short timer; when you stop fragging, one
-clip covering the *whole* streak is saved. Solo kill = one clip. Ace = one clip
-with all five kills, not five files.
+Choose the installer for a Start menu shortcut and in-app updates. For the
+portable version, extract the full ZIP and run AegisClipper.exe from the
+extracted folder.
 
----
+## Record your first highlight
 
-## Install (the easy way)
+1. Open Aegis Clipper and select **Save and open library** in setup. Aegis looks
+   through your Steam libraries and installs its CS2 integration when it finds
+   the game.
+2. Start CS2, or restart it if it was already open. The dashboard shows
+   **Replay buffer ready** and **CS2 connected** once capture and game updates
+   are active.
+3. Get a kill in a practice match. When your streak ends, the clip appears in
+   your library. Select **Save replay** to save the current buffer manually.
 
-1. Download **AegisClipper-Setup.exe** from Releases and run it.
-2. The app opens as a desktop window with a quick **setup wizard**.
-3. The wizard looks through your Steam libraries and installs the CS2
-   integration when you save setup. If the game was already open, restart it
-   so it loads the integration file. You can also connect a custom CS2
-   installation or test five seconds of capture from Settings.
+If setup can't find CS2, open **Settings → Counter-Strike 2**, expand
+**Use a custom CS2 installation**, and select **Connect CS2** after entering
+the game's cfg folder. For playback or recording issues, start with
+**Settings → Test screen capture**, then check the [troubleshooting guide](#troubleshooting).
 
-Open CS2 and wait for **Replay buffer ready** and **CS2 connected**. Highlights
-appear in your clip library after each streak. **Save replay** lets you check the
-buffer before your first highlight.
-**No OBS, no extra downloads** — the installer bundles everything (recorder,
-WebView2 runtime, ffmpeg).
+The built-in recorder uses the bundled FFmpeg and captures video. Use the
+[optional OBS backend](#using-obs-instead-optional) to include game audio.
 
----
+[Recording quality](#recording-quality) · [Troubleshooting](#troubleshooting) ·
+[Run from source](#run-from-source-developers)
 
 ## Run from source (developers)
 
@@ -88,7 +81,7 @@ game audio, configure audio sources and Replay Buffer in OBS.
 
 ### Using OBS instead (optional)
 
-Prefer OBS's capture quality? In the wizard, expand **"Prefer OBS?"** and enable
+Prefer OBS's capture quality? In the wizard, expand **Use OBS instead** and enable
 it. Then in OBS: enable the **Replay Buffer** (Settings → Output → Advanced) and
 the **WebSocket server** (Tools → WebSocket Server Settings, port 4455). Aegis
 will trigger OBS to save instead of using its own recorder.
@@ -106,7 +99,7 @@ will trigger OBS to save instead of using its own recorder.
 | **Discord auto-fit** | Clips over Discord's 25 MB limit are transparently re-encoded to fit. |
 | **Montage builder** | Select clips → one stitched video, optional music + 9:16 mobile export. |
 | **Setup wizard** | System check, one-click CS2 integration, quality presets, link upload targets. |
-| **Zero game impact** | Reads Valve's official GSI API — never touches game memory or files. |
+| **Game integration** | Reads Valve's Game State Integration updates over localhost. |
 
 ### Upload targets at a glance
 
