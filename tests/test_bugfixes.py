@@ -70,6 +70,38 @@ def test_failed_save_keeps_pending_kills(cfg):
     # streak preserved (not discarded) so it can clip on a later kill
     assert eng.status()["pending_kills"] == 2
     assert eng.catalog.list() == []
+    eng._timer.cancel()
+
+
+def test_recorder_recovers_and_saves_same_streak_without_another_kill(cfg, monkeypatch):
+    timers = []
+
+    class Timer:
+        def __init__(self, delay, action):
+            self.delay = delay
+            self.action = action
+
+        def start(self):
+            timers.append(self)
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr("aegis.engine.threading.Timer", Timer)
+    cfg.set("polish.enabled", False)
+    eng = Engine(cfg, Catalog())
+    eng.recorder = _FailRecorder()
+    eng.handle_payload(_gsi(0))
+    eng.handle_payload(_gsi(2))
+    timers[0].action()
+
+    assert eng.status()["pending_kills"] == 2
+    assert timers[1].delay == 2
+    eng.recorder = _OkRecorder()
+    timers[1].action()
+
+    assert eng.status()["pending_kills"] == 0
+    assert [clip.kills for clip in eng.catalog.list()] == [2]
 
 
 def test_successful_save_consumes_pending_kills(cfg):

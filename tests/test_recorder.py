@@ -1,4 +1,8 @@
+import sys
+import threading
 from pathlib import Path
+
+import pytest
 
 from aegis import recorder
 
@@ -92,3 +96,73 @@ def test_builtin_save_without_capture_returns_none(cfg, tmp_path):
     # never started -> no process -> graceful None, no exception
     assert rec.save(30, tmp_path / "out.mp4") is None
     assert rec.status()["backend"] == "builtin"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows process table")
+def test_game_detection_matches_exact_process_name():
+    assert recorder._process_running(Path(sys.executable).name.upper())
+    assert not recorder._process_running("aegis-nonexistent-game-process.exe")
+
+
+def test_process_detection_failure_cannot_start_recording(cfg, monkeypatch):
+    rec = recorder.BuiltinRecorder(cfg)
+
+    def fail(_):
+        raise OSError("process snapshot unavailable")
+
+    monkeypatch.setattr(recorder, "_process_running", fail)
+    monkeypatch.setattr(rec, "_spawn", lambda *_: pytest.fail("Cannot record without a process match"))
+    monkeypatch.setattr(rec._stop, "wait", lambda _: rec._stop.set())
+    rec._run()
+    assert not rec.status()["capturing"]
+    assert "Windows could not check" in rec.status()["detail"]
+
+
+def test_stalled_buffer_is_detected_even_if_current_segment_keeps_changing(cfg, monkeypatch):
+    rec = recorder.BuiltinRecorder(cfg)
+    rec._stage = "starting"
+    rec._last_segment_at = 10.0
+    closed, current = rec._bdir / "seg_001.ts", rec._bdir / "seg_002.ts"
+    entries = [(closed, 100), (current, 110)]
+    monkeypatch.setattr(rec, "_segment_entries", lambda: entries)
+    monkeypatch.setattr(recorder.time, "monotonic", lambda: 12.0)
+    assert not rec._check_segment_progress(2)
+    assert rec._stage == "ready"
+
+    monkeypatch.setattr(recorder.time, "monotonic", lambda: 23.0)
+    entries[-1] = (current, 999)
+    assert "stopped writing" in rec._check_segment_progress(2)
+
+
+def test_slow_encoder_launch_does_not_block_recorder_status(cfg, monkeypatch):
+    rec = recorder.BuiltinRecorder(cfg)
+    entered, release, answered, terminated = (threading.Event() for _ in range(4))
+    captured_status = {}
+
+    def launch(*args, **kwargs):
+        entered.set()
+        assert release.wait(4)
+        return object()
+
+    def report():
+        captured_status.update(rec.status())
+        answered.set()
+
+    monkeypatch.setattr(recorder.subprocess, "Popen", launch)
+    monkeypatch.setattr("aegis.winjob.guard", lambda _: None)
+    monkeypatch.setattr(rec, "_terminate", lambda _: terminated.set())
+    spawn = threading.Thread(target=rec._spawn, args=("ffmpeg", "ddagrab", "libx264", 2))
+    spawn.start()
+    try:
+        assert entered.wait(2)
+        query = threading.Thread(target=report)
+        query.start()
+        assert answered.wait(1)
+        assert captured_status["state"] == "starting"
+        rec._stop.set()
+    finally:
+        release.set()
+        spawn.join(5)
+    query.join(2)
+    assert terminated.is_set()
+    assert rec._proc is None

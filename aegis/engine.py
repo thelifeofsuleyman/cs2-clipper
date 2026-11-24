@@ -63,6 +63,7 @@ class Engine:
         self._timer_token = None
         self._match_generation = 0
         self._last_gsi = 0.0
+        self._last_kill_at: float | None = None
         self._last_player = ""
         self._last_map = ""
         self._state = {
@@ -124,6 +125,13 @@ class Engine:
             if diff <= 0:
                 return
 
+            now = time.monotonic()
+            if self._last_kill_at is not None and now - self._last_kill_at >= self._replay_window():
+                if self._state["pending_kills"]:
+                    log("Previous streak aged out of the replay buffer")
+                    self._state["pending_kills"] = 0
+                    self._match_generation += 1
+            self._last_kill_at = now
             self._state["pending_kills"] += diff
             self._state.update(map_name=self._last_map or "unknown", round_n=round_n, side=team,
                                steam_name=steam_name, steam_id=steam_id)
@@ -131,11 +139,13 @@ class Engine:
                 f"on {map_name} round {round_n}")
             self._arm_timer()
 
-    def _arm_timer(self) -> None:
+    def _arm_timer(self, delay: float | None = None) -> None:
         if self._timer is not None:
             self._timer.cancel()
         token = self._timer_token = object()
-        t = threading.Timer(float(self.cfg.get("engine.debounce_sec")), lambda: self._save_clip(token))
+        if delay is None:
+            delay = float(self.cfg.get("engine.debounce_sec"))
+        t = threading.Timer(delay, lambda: self._save_clip(token))
         t.daemon = True
         self._timer = t
         t.start()
@@ -191,6 +201,7 @@ class Engine:
             if token is not None and token is not self._timer_token:
                 return
             generation = self._match_generation
+            last_kill = self._last_kill_at
             kills = self._state["pending_kills"]
             map_name = self._state["map_name"]
             round_n = self._state["round_n"]
@@ -202,21 +213,37 @@ class Engine:
             self._consume_pending(kills, generation)
             return
 
+        clip_seconds = self._replay_window()
+        expires_at = (last_kill if last_kill is not None else time.monotonic()) + clip_seconds
+        if time.monotonic() >= expires_at:
+            log("Streak aged out of the replay buffer before it could be saved")
+            self._consume_pending(kills, generation)
+            return
+
         log(f"Saving clip for {kills} kill(s)")
         raw_tmp = paths.clips_dir() / f".raw_{uuid.uuid4().hex[:8]}.mp4"
-        clip_seconds = float(self.cfg.get("recording.clip_seconds", 30))
         try:
             with self._rec_lock:
                 clip_path = self.recorder.save(clip_seconds, raw_tmp)
         except Exception as e:
             log(f"Replay save failed: {e}")
-            return
+            clip_path = None
         if clip_path is None:
-            log("Recorder produced no clip — keeping the streak to retry on the next kill")
-            return                                # keep pending_kills intact
+            with self._lock:
+                if generation == self._match_generation and token is self._timer_token:
+                    # A fresh kill supersedes this retry and starts a new debounce.
+                    self._arm_timer(max(0.0, min(2.0, expires_at - time.monotonic())))
+                    log("Recorder produced no clip. Retrying while the streak is in the buffer.")
+            return
 
         self._consume_pending(kills, generation)
         return clip_path, kills, map_name, round_n, side, steam_name, steam_id
+
+    def _replay_window(self) -> float:
+        requested = float(self.cfg.get("recording.clip_seconds", 30))
+        debounce = float(self.cfg.get("engine.debounce_sec"))
+        segment = max(1, int(self.cfg.get("recording.segment_time", 2)))
+        return max(requested, debounce + 2 * segment)
 
     def _publish_clip(self, clip_path: Path, kills: int, map_name: str, round_n: int,
                       side: str, steam_name: str, steam_id: str) -> None:

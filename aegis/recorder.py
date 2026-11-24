@@ -194,7 +194,8 @@ class BuiltinRecorder(Recorder):
         self._stage = "idle"
         self._detail = ""
         self._stderr = None
-        self._spawned_at = 0.0
+        self._last_segment_at = 0.0
+        self._last_segment_write = 0
         # Each recorder instance gets its OWN buffer dir. If a config change spins
         # up a new recorder, its ffmpeg can't collide with a lingering old one's
         # segment files, and an in-flight save() reads from a stable directory.
@@ -220,11 +221,8 @@ class BuiltinRecorder(Recorder):
         sup = self._supervisor
         if sup and sup.is_alive() and sup is not threading.current_thread():
             sup.join(timeout=6.0)
-        # ffmpeg is now stopped; drop this instance's buffer dir (best effort).
-        try:
+        if sup is None or not sup.is_alive():
             shutil.rmtree(self._bdir, ignore_errors=True)
-        except Exception:
-            pass
 
     def _run(self) -> None:
         """Supervisor: keep ffmpeg capturing while enabled (and, if gated, while
@@ -237,7 +235,17 @@ class BuiltinRecorder(Recorder):
         next_choice = 0
         while not self._stop.is_set():
             try:
-                want = (not gate) or _process_running(game)
+                try:
+                    want = (not gate) or _process_running(game)
+                except OSError as e:
+                    if self._stage != "error":
+                        log(f"Stopped capture because CS2 could not be detected: {e}")
+                    self._kill_proc()
+                    choices, next_choice = [], 0
+                    self._stage = "error"
+                    self._detail = "Windows could not check whether CS2 is running. Retrying."
+                    self._stop.wait(2.0)
+                    continue
                 with self._lock:
                     proc = self._proc
                 if not want:
@@ -250,13 +258,8 @@ class BuiltinRecorder(Recorder):
                     if proc is not None:
                         if proc.poll() is not None:
                             self._capture_failed(f"FFmpeg exited ({proc.returncode})")
-                        elif self._stage == "starting":
-                            if len(list(self._bdir.glob("seg_*.ts"))) > 1:
-                                self._stage = "ready"
-                                self._detail = ""
-                                log(f"Replay buffer ready ({self._method}, {self._encoder})")
-                            elif time.monotonic() - self._spawned_at > max(10, segment_time * 3):
-                                self._capture_failed("FFmpeg produced no completed replay segment")
+                        elif (problem := self._check_segment_progress(segment_time)):
+                            self._capture_failed(problem)
                     if self._proc is None:
                         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
                         if not ffmpeg:
@@ -278,9 +281,38 @@ class BuiltinRecorder(Recorder):
                 self._stage = "error"
                 self._detail = str(e)
                 log(f"Built-in recorder supervisor error: {e}")
+                self._kill_proc()
             self._stop.wait(2.0)
         self._kill_proc()  # ensure ffmpeg is gone when the loop exits
+        shutil.rmtree(self._bdir, ignore_errors=True)
         self._stage = "idle"
+
+    def _check_segment_progress(self, segment_time: int) -> str:
+        files = self._segment_entries()
+        writes = sorted(mtime for _, mtime in files)
+        newest_write = writes[-2] if len(writes) > 1 else 0
+        now = time.monotonic()
+        if newest_write != self._last_segment_write:
+            self._last_segment_write = newest_write
+            self._last_segment_at = now
+        if now - self._last_segment_at > max(10, segment_time * 3):
+            return "FFmpeg stopped writing replay segments"
+        if self._stage == "starting" and len(files) > 1:
+            self._stage = "ready"
+            self._detail = ""
+            log(f"Replay buffer ready ({self._method}, {self._encoder})")
+        return ""
+
+    def _segment_entries(self) -> list[tuple[Path, int]]:
+        entries = []
+        for segment in self._bdir.glob("seg_*.ts"):
+            try:
+                stat = segment.stat()
+                if stat.st_size:
+                    entries.append((segment, stat.st_mtime_ns))
+            except FileNotFoundError:
+                continue
+        return entries
 
     def _spawn(self, ffmpeg: str, method: str, encoder: str, seg_time: int) -> None:
         if self._stop.is_set():        # bail if a stop raced in
@@ -297,7 +329,8 @@ class BuiltinRecorder(Recorder):
         w, h, fps, bitrate = PRESETS.get(preset, PRESETS["medium"])
         fps = int(self.cfg.get("recording.fps", fps) or fps)
         buffer_secs = max(int(self.cfg.get("recording.buffer_seconds", 45)),
-                          math.ceil(float(self.cfg.get("recording.clip_seconds", 30))))
+                          math.ceil(float(self.cfg.get("recording.clip_seconds", 30))),
+                          math.ceil(float(self.cfg.get("engine.debounce_sec", 7))) + 2 * seg_time)
         wrap = max(4, math.ceil(buffer_secs / seg_time) + 2)
 
         cmd = build_capture_cmd(
@@ -306,23 +339,31 @@ class BuiltinRecorder(Recorder):
         )
         self._method, self._encoder = method, encoder
         self._stage = "starting"
+        self._last_segment_write = 0
         log(f"Built-in recorder starting ({method}, {encoder}, {fps}fps)")
+        stderr = None
         try:
-            with self._lock:
-                if self._stop.is_set():
-                    return
-                self._stderr = tempfile.TemporaryFile()
-                proc = self._proc = subprocess.Popen(
-                    cmd, stdout=subprocess.DEVNULL, stderr=self._stderr,
-                    creationflags=_NO_WINDOW,
-                )
-                self._spawned_at = time.monotonic()
-            # Ensure this ffmpeg dies if the app crashes / is killed / self-updates,
-            # so it can't keep recording or lock the bundled ffmpeg.exe.
-            from . import winjob
-            winjob.guard(proc)
-        except Exception as e:
+            stderr = tempfile.TemporaryFile()
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=stderr, creationflags=_NO_WINDOW,
+            )
+        except (OSError, ValueError) as e:
+            if stderr:
+                stderr.close()
             self._capture_failed(str(e))
+            return
+
+        from . import winjob
+        winjob.guard(proc)
+        with self._lock:
+            stopped = self._stop.is_set()
+            if not stopped:
+                self._last_segment_at = time.monotonic()
+                self._stderr = stderr
+                self._proc = proc
+        if stopped:
+            self._terminate(proc)
+            stderr.close()
 
     def _capture_failed(self, reason: str) -> None:
         with self._lock:
@@ -341,18 +382,23 @@ class BuiltinRecorder(Recorder):
             p = self._proc
             self._proc = None
             err, self._stderr = self._stderr, None
-        if p and p.poll() is None:
-            try:
-                p.terminate()
-                try:
-                    p.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    p.kill()
-                    p.wait(timeout=3)
-            except Exception:
-                pass
+        if p:
+            self._terminate(p)
         if err:
             err.close()
+
+    @staticmethod
+    def _terminate(proc: subprocess.Popen) -> None:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=3)
+            except Exception:
+                pass
 
     # -- save --
     def save(self, seconds: float, out_path: Path) -> Path | None:
@@ -371,13 +417,7 @@ class BuiltinRecorder(Recorder):
         # only while the buffer is warming up.
         if len(list(bdir.glob("seg_*.ts"))) < 2:
             self._stop.wait(min(seg_time, 2))
-        entries = []
-        for p in bdir.glob("seg_*.ts"):
-            try:
-                st = p.stat()
-                entries.append((p, st.st_mtime))
-            except FileNotFoundError:
-                continue
+        entries = self._segment_entries()
         if len(entries) < 2:
             return None
         segs = pick_segments(entries, seconds, seg_time)
@@ -455,15 +495,11 @@ def _encoders_text(ffmpeg: str) -> str:
 
 
 def _process_running(name: str) -> bool:
-    """True if a process called `name` is running (Windows tasklist)."""
+    """Check through Windows without launching a subprocess for each poll."""
     if sys.platform != "win32":
-        return True  # don't gate on non-Windows dev machines
-    try:
-        r = subprocess.run(["tasklist", "/fi", f"imagename eq {name}", "/nh"],
-                          capture_output=True, text=True, timeout=5, creationflags=_NO_WINDOW)
-        return name.lower() in (r.stdout or "").lower()
-    except Exception:
-        return True
+        return False
+    from .winprocess import is_running
+    return is_running(name)
 
 
 def _wait_for_new_clip(replay_dir: Path, timeout: float) -> Path | None:
