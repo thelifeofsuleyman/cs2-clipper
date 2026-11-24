@@ -3,6 +3,8 @@
 Automatic CS2 highlights for Windows. Aegis detects kills, saves replays to your
 PC, and puts them in a desktop clip library.
 
+[![Release downloads](https://img.shields.io/github/downloads/thelifeofsuleyman/cs2-clipper/total)](https://github.com/thelifeofsuleyman/cs2-clipper/releases)
+
 **[Download the Windows installer](https://github.com/thelifeofsuleyman/cs2-clipper/releases/latest/download/AegisClipper-Setup.exe)** ·
 [Portable ZIP](https://github.com/thelifeofsuleyman/cs2-clipper/releases/latest/download/AegisClipper-portable.zip) ·
 [Release notes](https://github.com/thelifeofsuleyman/cs2-clipper/releases/latest)
@@ -27,8 +29,9 @@ tray icon reopens the library.
 - Browse, search, rename, and favorite clips in the desktop library.
 - Select clips and build a montage.
 - Share to Telegram, Discord, or YouTube after connecting a destination in Settings.
-- Choose a recording preset in Settings. Start with **Balanced** (900p / 30 fps)
-  or use **Low-end** (720p / 30 fps) to reduce recording load.
+- **Prioritize game FPS** limits capture to 30 fps and uses direct GPU
+  capture when available. That path records at desktop resolution. To use a
+  fixed quality preset or add effects to automatic clips, turn it off.
 
 The built-in recorder captures video. To include game audio, enable **Use OBS
 instead** in Aegis and configure audio sources, Replay Buffer, and the WebSocket
@@ -42,6 +45,11 @@ server in OBS.
 | Waiting for game updates | Check the CS2 integration in Settings, restart the game, and enter a match. |
 | Capture unavailable | Run **Settings → Test screen capture** and check **Activity** for errors. With OBS, start its Replay Buffer. |
 | Where are my saved clips? | Open **Open clips folder** from the tray menu. The built-in library stores clips under `%APPDATA%\AegisClipper\clips`. |
+
+To report recording issues, use **Activity → Copy recorder diagnostics**. The
+report includes the capture mode, FPS target, and replay save outcomes for the
+current session. It stays local until you share it and contains no account
+details or file paths.
 
 Existing installs can use **Check for updates** in the dashboard. The installer
 is currently unsigned, so Windows may display a publisher warning.

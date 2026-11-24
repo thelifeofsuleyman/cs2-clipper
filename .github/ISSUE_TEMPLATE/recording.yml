@@ -1,0 +1,16 @@
+name: Recording or FPS issue
+description: Report capture, replay, or game performance problems.
+body:
+  - type: textarea
+    id: symptoms
+    attributes:
+      label: What happened?
+      description: If relevant, include your game FPS with Aegis recording and with recording off.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Recorder diagnostics
+      description: In Aegis, open Activity and select Copy recorder diagnostics. Paste the report here if you want to share it publicly.
+      render: json

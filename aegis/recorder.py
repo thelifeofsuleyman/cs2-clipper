@@ -49,6 +49,7 @@ PRESETS: dict[str, tuple] = {
 
 # Encoder preference order; first one ffmpeg reports as available wins.
 _HW_ENCODERS = ["h264_nvenc", "h264_amf", "h264_qsv"]
+_D3D11_ENCODERS = {"h264_nvenc", "h264_amf"}
 
 
 # ───────── pure helpers (unit-testable) ─────────
@@ -81,20 +82,70 @@ def capture_candidates(ffmpeg: str, cfg: Config) -> list[tuple[str, str]]:
         choices.append("libx264")
     method = cfg.get("recording.capture", "ddagrab")
     methods = ("gdigrab", "ddagrab") if method == "gdigrab" else ("ddagrab", "gdigrab")
-    return [(method, encoder) for method in methods for encoder in choices]
+    prefer_direct = (cfg.get("recording.prioritize_game_fps", True)
+                     or cfg.get("recording.preset") == "source")
+    candidates = []
+    for method in methods:
+        if method == "ddagrab" and prefer_direct:
+            candidates.extend(("ddagrab-d3d11", e) for e in choices if e in _D3D11_ENCODERS)
+        candidates.extend((method, encoder) for encoder in choices)
+    return candidates
 
 
-def _encoder_args(encoder: str, bitrate: str) -> list[str]:
+def _encoder_args(encoder: str, bitrate: str, performance: bool = False) -> list[str]:
     if encoder == "libx264":
-        return ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        args = ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
                 "-b:v", bitrate]
+        return [*args, "-threads", "2"] if performance else args
     if encoder == "h264_nvenc":
+        if performance:
+            return ["-c:v", encoder, "-preset", "p2", "-tune", "ll", "-bf", "0",
+                    "-rc-lookahead", "0", "-b:v", bitrate]
         return ["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", bitrate]
     if encoder == "h264_amf":
         return ["-c:v", "h264_amf", "-quality", "speed", "-b:v", bitrate]
     if encoder == "h264_qsv":
         return ["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", bitrate]
     return ["-c:v", encoder, "-b:v", bitrate]
+
+
+def capture_options(cfg: Config, encoder: str) -> tuple[int, int, int, str]:
+    preset = cfg.get("recording.preset", "medium")
+    w, h, fps, bitrate = PRESETS.get(preset, PRESETS["medium"])
+    fps = int(cfg.get("recording.fps", fps) or fps)
+    if cfg.get("recording.prioritize_game_fps", True):
+        fps = min(fps, 30)
+        if encoder == "libx264":
+            w, h, _, bitrate = PRESETS["low"]
+    return w, h, fps, bitrate
+
+
+def capture_video_args(width: int, height: int, fps: int, encoder: str, bitrate: str,
+                       method: str, performance: bool) -> list[str]:
+    args = []
+    if method == "gdigrab":
+        args += ["-f", "gdigrab", "-framerate", str(fps), "-i", "desktop"]
+        if width and height:
+            scale = f"scale={width}:{height}"
+            if performance:
+                args += ["-filter_threads", "2"]
+                scale += ":flags=fast_bilinear"
+            args += ["-vf", scale]
+    else:
+        chain = f"ddagrab=output_idx=0:framerate={fps}"
+        if performance:
+            chain += ":draw_mouse=0"
+        if method != "ddagrab-d3d11":
+            chain += ",hwdownload,format=bgra"
+            if width and height:
+                chain += f",scale={width}:{height}"
+                if performance:
+                    chain += ":flags=fast_bilinear"
+            chain += ",format=nv12"
+            if performance:
+                args += ["-filter_complex_threads", "2"]
+        args += ["-filter_complex", chain]
+    return [*args, *_encoder_args(encoder, bitrate, performance)]
 
 
 def build_capture_cmd(
@@ -109,6 +160,8 @@ def build_capture_cmd(
     segment_time: int,
     segment_wrap: int,
     use_ddagrab: bool = True,
+    direct_gpu: bool = False,
+    performance: bool = False,
 ) -> list[str]:
     """ffmpeg command for the continuous rolling-buffer capture.
 
@@ -117,22 +170,8 @@ def build_capture_cmd(
     """
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
 
-    # Desktop Duplication (sees fullscreen games) -> system memory in nv12.
-    chain = "ddagrab=output_idx=0:framerate={fps},hwdownload,format=bgra".format(fps=fps)
-    if width and height:
-        chain += f",scale={width}:{height}"
-    chain += ",format=nv12"
-
-    if use_ddagrab:
-        cmd += ["-filter_complex", chain]
-    else:
-        # Fallback screen grab (GDI) — works without ddagrab but not on some
-        # exclusive-fullscreen games.
-        cmd += ["-f", "gdigrab", "-framerate", str(fps), "-i", "desktop"]
-        if width and height:
-            cmd += ["-vf", f"scale={width}:{height}"]
-
-    cmd += _encoder_args(encoder, bitrate)
+    method = "ddagrab-d3d11" if direct_gpu else ("ddagrab" if use_ddagrab else "gdigrab")
+    cmd += capture_video_args(width, height, fps, encoder, bitrate, method, performance)
     cmd += [
         "-g", str(fps * segment_time),
         "-force_key_frames", f"expr:gte(t,n_forced*{segment_time})",
@@ -190,6 +229,7 @@ class BuiltinRecorder(Recorder):
         self._supervisor: threading.Thread | None = None
         self._stop = threading.Event()
         self._encoder = "?"
+        self._fps = 0
         self._method = ""
         self._stage = "idle"
         self._detail = ""
@@ -325,9 +365,8 @@ class BuiltinRecorder(Recorder):
             except Exception:
                 pass
 
-        preset = self.cfg.get("recording.preset", "medium")
-        w, h, fps, bitrate = PRESETS.get(preset, PRESETS["medium"])
-        fps = int(self.cfg.get("recording.fps", fps) or fps)
+        w, h, fps, bitrate = capture_options(self.cfg, encoder)
+        performance = bool(self.cfg.get("recording.prioritize_game_fps", True))
         buffer_secs = max(int(self.cfg.get("recording.buffer_seconds", 45)),
                           math.ceil(float(self.cfg.get("recording.clip_seconds", 30))),
                           math.ceil(float(self.cfg.get("engine.debounce_sec", 7))) + 2 * seg_time)
@@ -335,9 +374,12 @@ class BuiltinRecorder(Recorder):
 
         cmd = build_capture_cmd(
             ffmpeg, bdir, width=w, height=h, fps=fps, encoder=encoder,
-            bitrate=bitrate, segment_time=seg_time, segment_wrap=wrap, use_ddagrab=method == "ddagrab",
+            bitrate=bitrate, segment_time=seg_time, segment_wrap=wrap,
+            use_ddagrab=method != "gdigrab", direct_gpu=method == "ddagrab-d3d11",
+            performance=performance,
         )
         self._method, self._encoder = method, encoder
+        self._fps = fps
         self._stage = "starting"
         self._last_segment_write = 0
         log(f"Built-in recorder starting ({method}, {encoder}, {fps}fps)")
@@ -455,7 +497,7 @@ class BuiltinRecorder(Recorder):
         with self._lock:
             proc = self._proc
         ready = self._stage == "ready" and proc is not None and proc.poll() is None
-        return {"backend": "builtin", "capturing": ready, "encoder": self._encoder,
+        return {"backend": "builtin", "capturing": ready, "encoder": self._encoder, "fps": self._fps,
                 "method": self._method, "state": self._stage, "detail": self._detail}
 
 

@@ -39,6 +39,7 @@ DEFAULTS: dict[str, Any] = {
         "fps": 0,                      # 0 = use the preset's fps
         "encoder": "auto",             # auto | nvenc | amf | qsv | x264
         "capture": "ddagrab",          # ddagrab (fullscreen-safe) | gdigrab
+        "prioritize_game_fps": True,   # direct GPU capture and lighter in-game processing
         "buffer_seconds": 45,          # rolling buffer length kept on disk
         "clip_seconds": 30,            # how much to save per kill streak
         "segment_time": 2,             # rolling-buffer segment granularity

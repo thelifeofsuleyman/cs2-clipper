@@ -122,24 +122,13 @@ def make_test_clip(ffmpeg: str | None, out_path: Path, seconds: int = 5) -> Path
 
 def _capture_once(ffmpeg: str, out_path: Path, seconds: int, cfg, method: str, encoder: str) -> bool:
     from . import recorder
-    preset = cfg.get("recording.preset", "medium")
-    w, h, fps, bitrate = recorder.PRESETS.get(preset, recorder.PRESETS["medium"])
-    fps = int(cfg.get("recording.fps", fps) or fps)
+    w, h, fps, bitrate = recorder.capture_options(cfg, encoder)
+    performance = bool(cfg.get("recording.prioritize_game_fps", True))
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
-    if method == "ddagrab":
-        chain = f"ddagrab=output_idx=0:framerate={fps},hwdownload,format=bgra"
-        if w and h:
-            chain += f",scale={w}:{h}"
-        chain += ",format=nv12"
-        cmd += ["-filter_complex", chain]
-    else:
-        cmd += ["-f", "gdigrab", "-framerate", str(fps), "-i", "desktop"]
-        if w and h:
-            cmd += ["-vf", f"scale={w}:{h}"]
-    cmd += recorder._encoder_args(encoder, bitrate)
+    cmd += recorder.capture_video_args(w, h, fps, encoder, bitrate, method, performance)
     cmd += ["-t", str(seconds), "-movflags", "+faststart", str(out_path)]
 
-    log(f"Screen capture test via {method} ({preset}, {encoder}, {seconds}s)")
+    log(f"Screen capture test via {method} ({fps} fps, {encoder}, {seconds}s)")
     try:
         r = _run(cmd, timeout=seconds + 8)
     except (OSError, subprocess.SubprocessError) as e:
@@ -160,7 +149,7 @@ def capture_screen_test(ffmpeg: str | None, out_path: Path, seconds: int, cfg) -
     from .recorder import capture_candidates
     for method, encoder in capture_candidates(ffmpeg, cfg):
         if _capture_once(ffmpeg, out_path, seconds, cfg, method, encoder):
-            return method
+            return "ddagrab" if method == "ddagrab-d3d11" else method
     out_path.unlink(missing_ok=True)
     return None
 

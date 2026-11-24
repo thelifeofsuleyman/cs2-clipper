@@ -63,6 +63,9 @@ class Engine:
         self._timer_token = None
         self._match_generation = 0
         self._last_gsi = 0.0
+        self._save_attempts = 0
+        self._save_successes = 0
+        self._last_save_ms: int | None = None
         self._last_kill_at: float | None = None
         self._last_player = ""
         self._last_map = ""
@@ -186,6 +189,25 @@ class Engine:
             ],
         }
 
+    def replay_metrics(self) -> dict:
+        with self._lock:
+            return {"attempts": self._save_attempts, "saved": self._save_successes,
+                    "last_save_ms": self._last_save_ms}
+
+    def _record_replay(self, seconds: float, destination: Path) -> Path | None:
+        saved = None
+        with self._rec_lock:
+            started = time.monotonic()
+            try:
+                saved = self.recorder.save(seconds, destination)
+                return saved
+            finally:
+                elapsed_ms = round((time.monotonic() - started) * 1000)
+                with self._lock:
+                    self._save_attempts += 1
+                    self._save_successes += int(saved is not None)
+                    self._last_save_ms = elapsed_ms
+
     # ───────── clip pipeline ─────────
     def _save_clip(self, token=None) -> None:
         with self._save_lock:
@@ -223,8 +245,7 @@ class Engine:
         log(f"Saving clip for {kills} kill(s)")
         raw_tmp = paths.clips_dir() / f".raw_{uuid.uuid4().hex[:8]}.mp4"
         try:
-            with self._rec_lock:
-                clip_path = self.recorder.save(clip_seconds, raw_tmp)
+            clip_path = self._record_replay(clip_seconds, raw_tmp)
         except Exception as e:
             log(f"Replay save failed: {e}")
             clip_path = None
@@ -250,8 +271,10 @@ class Engine:
         # Produce a share-ready version (intro card + fades); fall back to raw.
         produced = clip_path
         try:
-            polished = polish.polish_clip(self.cfg, clip_path, kills, map_name,
-                                          steam_name, steam_id)
+            polished = None
+            if not self.cfg.get("recording.prioritize_game_fps", True):
+                polished = polish.polish_clip(self.cfg, clip_path, kills, map_name,
+                                              steam_name, steam_id)
             if polished is not None:
                 produced = polished
                 try:
@@ -355,8 +378,7 @@ class Engine:
 
     def save_replay(self) -> dict:
         out = paths.clips_dir() / f"replay_{uuid.uuid4().hex[:10]}.mp4"
-        with self._rec_lock:
-            captured = self.recorder.save(float(self.cfg.get("recording.clip_seconds", 30)), out)
+        captured = self._record_replay(float(self.cfg.get("recording.clip_seconds", 30)), out)
         if not captured:
             return {"ok": False, "detail": "Replay buffer is unavailable. Check capture status and Activity."}
         clip = self._catalog_clip(captured, 0, "Manual replay", 0, "?")

@@ -45,6 +45,19 @@ def test_health_and_status(app_client):
     assert "capturing" in s and "enabled_targets" in s
 
 
+def test_diagnostics_only_reports_allowlisted_session_metrics(app_client, monkeypatch):
+    client, _, _, engine = app_client
+    monkeypatch.setattr(engine.recorder, "status", lambda: {
+        "backend": "builtin", "capturing": True, "encoder": "h264_nvenc",
+        "method": "ddagrab-d3d11", "fps": 30, "detail": "private local path",
+    })
+    report = client.get("/api/diagnostics").get_json()
+    assert report["capture"] == {"backend": "builtin", "encoder": "h264_nvenc",
+                                 "method": "ddagrab-d3d11", "fps": 30}
+    assert report["this_session"] == {"attempts": 0, "saved": 0, "last_save_ms": None}
+    assert "private local path" not in str(report)
+
+
 def test_config_get_and_post_roundtrip(app_client):
     client, cfg, *_ = app_client
     r = client.post("/api/config", json={"recording": {"preset": "low", "clip_seconds": 20}})

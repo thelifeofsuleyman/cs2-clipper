@@ -226,6 +226,10 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   </section>
 
   <section data-panel=logs style=display:none>
+    <div class=bar>
+      <button class=ghost id=copyDiagnostics>Copy recorder diagnostics</button>
+      <a class=settings-link href="https://github.com/thelifeofsuleyman/cs2-clipper/issues/new?template=recording.yml" target=_blank rel=noopener>Report a recording issue</a>
+    </div>
     <div class=logbox id=logBox>Loading…</div>
   </section>
 </main>
@@ -310,7 +314,8 @@ async function loadStatus() {
     }
   }
   replay.disabled = !s.capturing || replay.getAttribute('aria-busy') === 'true';
-  $('#footStatus').textContent = rec.encoder && rec.encoder !== '?' ? rec.encoder + (rec.method ? ' · ' + rec.method : '') : '';
+  $('#footStatus').textContent = rec.encoder && rec.encoder !== '?' ? rec.encoder +
+    (rec.method ? ' · ' + rec.method : '') + (rec.fps ? ' · capture target ' + rec.fps + ' fps' : '') : '';
 }
 
 $('#saveReplay').onclick = () => busy($('#saveReplay'), 'Saving replay…', async () => {
@@ -480,6 +485,16 @@ async function loadLogs() {
   box.textContent = r.error || (r.lines || []).join('\\n') || 'No activity yet.';
   box.scrollTop = box.scrollHeight;
 }
+$('#copyDiagnostics').onclick = () => busy($('#copyDiagnostics'), 'Copying…', async () => {
+  const diagnostics = await api('/api/diagnostics');
+  if (diagnostics.error) { toast(diagnostics.error); return; }
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+    toast('Recorder diagnostics copied.');
+  } catch {
+    toast('Could not copy recorder diagnostics.');
+  }
+});
 
 function playVideo(url) {
   playerTrigger = document.activeElement;
@@ -615,6 +630,8 @@ details{margin-top:12px}summary{cursor:pointer;color:var(--txt);padding:4px 0 8p
       <option value=low>720p · 30 fps</option><option value=medium selected>900p · 30 fps</option>
       <option value=high>1080p · 60 fps</option><option value=source>Native · 60 fps</option>
     </select></div>
+    <div class=row><label for=rec_performance>Prioritize game FPS</label><input type=checkbox id=rec_performance checked></div>
+    <p class=hint>Limits capture to 30 fps, records at desktop resolution on the direct GPU path, and skips effects on automatic highlights.</p>
     <div class=row><label for=rec_clip>Replay length (seconds)</label><input type=number id=rec_clip min=5 max=120 value=30></div>
     <div class=row><label for=rec_gate>Capture only while CS2 is open</label><input type=checkbox id=rec_gate checked></div>
     <div class=row><label for=polish_en>Add clip intro and fades</label><input type=checkbox id=polish_en checked></div>
@@ -693,6 +710,7 @@ async function loadExisting() {
   $('#settingsTitle').textContent = c.first_run ? 'Set up automatic clipping' : 'Capture settings';
   $('#backToLibrary').hidden = c.first_run;
   $('#rec_preset').value = r.preset || 'medium';
+  $('#rec_performance').checked = r.prioritize_game_fps !== false;
   $('#rec_clip').value = r.clip_seconds ?? 30;
   $('#rec_gate').checked = r.only_when_game_running !== false;
   $('#polish_en').checked = (c.polish || {}).enabled !== false;
@@ -729,6 +747,7 @@ async function save() {
   const r = await api('/api/config', jsonPost({
     engine:{debounce_sec:$('#debounce').valueAsNumber, min_kills:$('#minkills').valueAsNumber},
     recording:{backend:$('#use_obs').checked ? 'obs' : 'builtin', preset:$('#rec_preset').value,
+      prioritize_game_fps:$('#rec_performance').checked,
       clip_seconds:$('#rec_clip').valueAsNumber, only_when_game_running:$('#rec_gate').checked},
     polish:{enabled:$('#polish_en').checked},
     obs:{replay_dir:$('#obs_replay_dir').value.trim(), port:$('#obs_port').valueAsNumber, password:$('#obs_password').value},

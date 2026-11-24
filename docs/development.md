@@ -61,3 +61,15 @@ powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Ffmpeg -Installer 
 Build outputs go to `dist/` and `packaging/Output/`. For the optional YouTube
 integration from source, install `google-api-python-client` and
 `google-auth-oauthlib` in the virtual environment.
+
+## Download and recording metrics
+
+The README badge uses GitHub release asset download counts. For counts by
+version and file, query the [public releases API](https://api.github.com/repos/thelifeofsuleyman/cs2-clipper/releases)
+and read `assets[].download_count`. A download can be an update, a repeat
+download, or a portable copy.
+
+The app's **Copy recorder diagnostics** action exports local, per-session
+recorder status and replay save counts. Users can paste that report into a
+[recording issue](https://github.com/thelifeofsuleyman/cs2-clipper/issues/new?template=recording.yml).
+The app does not collect active users or transmit these diagnostics.

@@ -66,9 +66,32 @@ def test_build_capture_cmd_ddagrab_nvenc():
 def test_capture_candidates_fall_back_to_software_and_other_input(cfg, monkeypatch):
     monkeypatch.setattr(recorder, "_encoders_text", lambda _: "h264_nvenc\nh264_qsv\nlibx264")
     assert recorder.capture_candidates("ffmpeg", cfg) == [
+        ("ddagrab-d3d11", "h264_nvenc"),
         ("ddagrab", "h264_nvenc"), ("ddagrab", "h264_qsv"), ("ddagrab", "libx264"),
         ("gdigrab", "h264_nvenc"), ("gdigrab", "h264_qsv"), ("gdigrab", "libx264"),
     ]
+
+
+def test_direct_gpu_capture_keeps_frames_in_d3d11(cfg):
+    cfg.set("recording.preset", "high")
+    width, height, fps, bitrate = recorder.capture_options(cfg, "h264_nvenc")
+    cmd = recorder.build_capture_cmd(
+        "ffmpeg", Path("/buf"), width=width, height=height, fps=fps,
+        bitrate=bitrate, encoder="h264_nvenc", segment_time=2, segment_wrap=25,
+        direct_gpu=True, performance=True,
+    )
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert graph == "ddagrab=output_idx=0:framerate=30:draw_mouse=0"
+    assert cmd[cmd.index("-preset") + 1] == "p2"
+    assert fps == 30
+
+
+def test_fixed_quality_remains_available(cfg, monkeypatch):
+    cfg.set("recording.prioritize_game_fps", False)
+    cfg.set("recording.preset", "high")
+    monkeypatch.setattr(recorder, "_encoders_text", lambda _: "h264_nvenc\nlibx264")
+    assert recorder.capture_candidates("ffmpeg", cfg)[0] == ("ddagrab", "h264_nvenc")
+    assert recorder.capture_options(cfg, "h264_nvenc") == recorder.PRESETS["high"]
 
 
 def test_build_capture_cmd_gdigrab_fallback_source_res():
