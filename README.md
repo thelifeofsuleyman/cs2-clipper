@@ -27,11 +27,10 @@ tray icon reopens the library.
 ## What you can do
 
 - Browse, search, rename, and favorite clips in the desktop library.
-- Select clips and build a montage.
 - Share to Telegram, Discord, or YouTube after connecting a destination in Settings.
-- **Prioritize game FPS** limits capture to 30 fps and uses direct GPU
-  capture when available. That path records at desktop resolution. To use a
-  fixed quality preset or add effects to automatic clips, turn it off.
+- In **Settings → Recording**, **Prioritize game FPS** limits built-in capture
+  to 30 fps and uses direct GPU capture at desktop resolution when available.
+  Turn it off to use a fixed quality preset or enable automatic clip effects.
 
 The built-in recorder captures video. To include game audio, enable **Use OBS
 instead** in Aegis and configure audio sources, Replay Buffer, and the WebSocket

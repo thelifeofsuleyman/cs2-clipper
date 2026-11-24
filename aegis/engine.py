@@ -272,7 +272,9 @@ class Engine:
         produced = clip_path
         try:
             polished = None
-            if not self.cfg.get("recording.prioritize_game_fps", True):
+            prioritize_fps = (self.cfg.get("recording.backend") == "builtin"
+                              and self.cfg.get("recording.prioritize_game_fps", True))
+            if not prioritize_fps:
                 polished = polish.polish_clip(self.cfg, clip_path, kills, map_name,
                                               steam_name, steam_id)
             if polished is not None:

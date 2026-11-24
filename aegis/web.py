@@ -190,21 +190,21 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
     @app.post("/api/config")
     def api_set_config():
-        import json as _json
         patch = request.get_json(silent=True)
         if not isinstance(patch, dict) or any(
             group in patch and not isinstance(patch[group], dict)
             for group in ("recording", "engine", "obs", "uploads", "polish", "montage", "update")
         ):
             return jsonify(error="Provide settings as a JSON object with settings groups."), 400
-        before = _json.dumps(cfg.get("recording"), sort_keys=True)
+        before = cfg.as_dict()
         cfg.update(patch)
         cfg.save()
-        after = _json.dumps(cfg.get("recording"), sort_keys=True)
-        # Only restart capture when recording settings actually changed (the
-        # wizard sends the whole config on every save, so don't interrupt an
-        # in-game buffer just because an upload token was edited).
-        if before != after and not cfg.get("first_run"):
+        recording = cfg.get("recording")
+        backend_changed = before["recording"] != recording
+        if recording["backend"] == "obs":
+            backend_changed = backend_changed or before["obs"] != cfg.get("obs")
+        # Editing sharing or highlight settings should not clear the replay buffer.
+        if backend_changed and not cfg.get("first_run"):
             engine.restart_recording()
         return jsonify(ok=True, config=cfg.as_dict())
 

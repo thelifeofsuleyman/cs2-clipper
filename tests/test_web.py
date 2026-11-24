@@ -22,6 +22,20 @@ def test_setup_page_renders(app_client):
     assert r.status_code == 200 and b"rec_preset" in r.data
 
 
+def test_config_restarts_only_the_active_recorder(app_client, monkeypatch):
+    client, cfg, _, engine = app_client
+    cfg.set("first_run", False)
+    restarts = []
+    monkeypatch.setattr(engine, "restart_recording", lambda: restarts.append(cfg.get("recording.backend")))
+
+    client.post("/api/config", json={"obs": {"port": 4456}})
+    assert restarts == []
+    client.post("/api/config", json={"recording": {"backend": "obs"}})
+    client.post("/api/config", json={"obs": {"port": 4457}})
+    client.post("/api/config", json={"engine": {"min_kills": 2}})
+    assert restarts == ["obs", "obs"]
+
+
 def test_quit_endpoint_schedules_exit(app_client, monkeypatch):
     client, *_ = app_client
     scheduled = {}
