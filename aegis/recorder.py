@@ -96,21 +96,31 @@ def capture_candidates(ffmpeg: str, cfg: Config) -> list[tuple[str, str]]:
     return candidates
 
 
-def _encoder_args(encoder: str, bitrate: str, performance: bool = False) -> list[str]:
+def _encoder_args(encoder: str, bitrate: str, performance: bool = False,
+                  compact: bool = False) -> list[str]:
+    rate = ["-b:v", bitrate]
+    if compact:
+        cap = ["-maxrate", bitrate, "-bufsize", bitrate]
+        if encoder == "h264_nvenc":
+            rate = ["-rc", "vbr", "-cq", "21", "-b:v", "0", *cap]
+        elif encoder == "libx264":
+            rate = ["-crf", "21", *cap]
+        else:
+            rate = ["-b:v", f"{int(bitrate[:-1]) * 700}k", *cap]
     if encoder == "libx264":
         args = ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-                "-b:v", bitrate]
+                *rate]
         return [*args, "-threads", "2"] if performance else args
     if encoder == "h264_nvenc":
         if performance:
             return ["-c:v", encoder, "-preset", "p2", "-tune", "ll", "-bf", "0",
-                    "-rc-lookahead", "0", "-b:v", bitrate]
-        return ["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", bitrate]
+                    "-rc-lookahead", "0", *rate]
+        return ["-c:v", "h264_nvenc", "-preset", "p4", *rate]
     if encoder == "h264_amf":
-        return ["-c:v", "h264_amf", "-quality", "speed", "-b:v", bitrate]
+        return ["-c:v", "h264_amf", "-quality", "speed", *rate]
     if encoder == "h264_qsv":
-        return ["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", bitrate]
-    return ["-c:v", encoder, "-b:v", bitrate]
+        return ["-c:v", "h264_qsv", "-preset", "veryfast", *rate]
+    return ["-c:v", encoder, *rate]
 
 
 def capture_options(cfg: Config, encoder: str) -> tuple[int, int, int, str]:
@@ -125,7 +135,7 @@ def capture_options(cfg: Config, encoder: str) -> tuple[int, int, int, str]:
 
 
 def capture_video_args(width: int, height: int, fps: int, encoder: str, bitrate: str,
-                       method: str, performance: bool) -> list[str]:
+                       method: str, performance: bool, compact: bool = False) -> list[str]:
     args = []
     if method == "gdigrab":
         args += ["-f", "gdigrab", "-framerate", str(fps), "-i", "desktop"]
@@ -149,7 +159,7 @@ def capture_video_args(width: int, height: int, fps: int, encoder: str, bitrate:
             if performance:
                 args += ["-filter_complex_threads", "2"]
         args += ["-filter_complex", chain]
-    return [*args, *_encoder_args(encoder, bitrate, performance)]
+    return [*args, *_encoder_args(encoder, bitrate, performance, compact)]
 
 
 def build_capture_cmd(
@@ -166,6 +176,7 @@ def build_capture_cmd(
     use_ddagrab: bool = True,
     direct_gpu: bool = False,
     performance: bool = False,
+    compact: bool = False,
 ) -> list[str]:
     """ffmpeg command for the continuous rolling-buffer capture.
 
@@ -175,7 +186,7 @@ def build_capture_cmd(
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
 
     method = "ddagrab-d3d11" if direct_gpu else ("ddagrab" if use_ddagrab else "gdigrab")
-    cmd += capture_video_args(width, height, fps, encoder, bitrate, method, performance)
+    cmd += capture_video_args(width, height, fps, encoder, bitrate, method, performance, compact)
     cmd += [
         "-g", str(fps * segment_time),
         "-force_key_frames", f"expr:gte(t,n_forced*{segment_time})",
@@ -411,6 +422,7 @@ class BuiltinRecorder(Recorder):
             bitrate=bitrate, segment_time=seg_time, segment_wrap=wrap,
             use_ddagrab=method != "gdigrab", direct_gpu=method == "ddagrab-d3d11",
             performance=performance,
+            compact=bool(self.cfg.get("recording.compact_video")),
         )
         self._method, self._encoder = method, encoder
         self._fps = fps
@@ -508,6 +520,17 @@ class BuiltinRecorder(Recorder):
             self._stop.wait(min(seg_time, 2))
         offset = time.time() - time.monotonic()
         entries = [(path, ns / 1e9 - offset) for path, ns in self._segment_entries()]
+        if ranges is None and self._stage == "ready":
+            requested_at = time.monotonic()
+            # Finish the segment containing the shortcut press before copying it.
+            deadline = requested_at + seg_time + 0.35
+            while time.monotonic() < deadline:
+                writes = sorted(end for _, end in entries)
+                if len(writes) > 1 and writes[-2] >= requested_at - 0.15:
+                    break
+                if self._stop.wait(0.1) or proc.poll() is not None:
+                    return None
+                entries = [(path, ns / 1e9 - offset) for path, ns in self._segment_entries()]
         if len(entries) < 2:
             return None
         segs = (pick_segments(entries, seconds, seg_time) if ranges is None
@@ -583,9 +606,10 @@ class ObsRecorder(Recorder):
              ranges: list[tuple[float, float]] | None = None) -> Path | None:
         replay_dir = Path(self.cfg.get("obs.replay_dir") or (Path.home() / "Videos"))
         replay_end = time.monotonic()
+        requested_at = time.time()
         if not self.obs.save_replay_buffer():
             return None
-        source = _wait_for_new_clip(replay_dir, float(self.cfg.get("engine.clip_wait_sec", 8)))
+        source = _wait_for_new_clip(replay_dir, float(self.cfg.get("engine.clip_wait_sec", 8)), requested_at)
         if not source or ranges is None:
             return source
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
@@ -617,7 +641,7 @@ def _process_running(name: str) -> bool:
     return is_running(name)
 
 
-def _wait_for_new_clip(replay_dir: Path, timeout: float) -> Path | None:
+def _wait_for_new_clip(replay_dir: Path, timeout: float, requested_at: float) -> Path | None:
     """Poll an OBS output dir for a freshly written video (OBS backend)."""
     start = time.time()
     while time.time() < start + timeout:
@@ -625,7 +649,7 @@ def _wait_for_new_clip(replay_dir: Path, timeout: float) -> Path | None:
         try:
             cands = [f for f in replay_dir.iterdir()
                      if f.is_file() and f.suffix.lower() in (".mp4", ".mkv", ".mov")
-                     and f.stat().st_mtime >= start - 1]
+                     and f.stat().st_mtime >= requested_at]
         except FileNotFoundError:
             log(f"OBS replay dir not found: {replay_dir}")
             return None

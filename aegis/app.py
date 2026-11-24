@@ -68,6 +68,8 @@ def _tray_image():
 
 def _clips_folder(cfg) -> str:
     """Where saved clips land — built-in recorder dir, or OBS's replay dir."""
+    if cfg.get("storage.clips_dir"):
+        return cfg.get("storage.clips_dir")
     if cfg.get("recording.backend") == "obs" and cfg.get("obs.replay_dir"):
         return cfg.get("obs.replay_dir")
     return str(paths.clips_dir())
@@ -103,6 +105,12 @@ class _WindowApi:
         self._closing.set()
         self._window.destroy()
 
+    def choose_clips_folder(self):
+        from webview import FileDialog
+
+        selected = self._window.create_file_dialog(FileDialog.FOLDER)
+        return selected[0] if selected else ""
+
     def _choose_close(self, tray_available: bool) -> None:
         # WebView2 completes ExecuteScriptAsync on the WinForms UI thread.
         # Calling evaluate_js in the synchronous closing handler freezes it.
@@ -127,6 +135,7 @@ def _run_window(cfg, port: int, landing: str) -> bool:
     why) if pywebview can't load, so the caller falls back to an app-mode window."""
     try:
         import webview
+        webview.settings["ALLOW_DOWNLOADS"] = True
     except Exception as e:
         log(f"Native window unavailable (pywebview import failed: {e}); using app-mode window")
         return False
@@ -344,6 +353,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     _banner(cfg, port)
     threading.Thread(target=serve, daemon=True).start()
+    from .hotkeys import ReplayHotkey
+
+    replay_hotkey = ReplayHotkey(cfg, engine)
+    replay_hotkey.start()
 
     # Start the recording backend unless the user is still in the setup wizard
     # (no point capturing until they've chosen quality/backend). The built-in
@@ -368,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
             threading.Event().wait()
         except KeyboardInterrupt:
             pass
+        replay_hotkey.close()
         engine.stop_recording()
         return 0
 
@@ -379,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         if not _open_app_mode(url):
             threading.Timer(1.0, lambda: webbrowser.open(url)).start()
         _run_tray_browser(cfg, port)
+    replay_hotkey.close()
     engine.stop_recording()
     return 0
 

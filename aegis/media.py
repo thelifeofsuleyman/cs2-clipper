@@ -175,7 +175,8 @@ def _capture_once(ffmpeg: str, out_path: Path, seconds: int, cfg, method: str, e
     w, h, fps, bitrate = recorder.capture_options(cfg, encoder)
     performance = bool(cfg.get("recording.prioritize_game_fps", True))
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
-    cmd += recorder.capture_video_args(w, h, fps, encoder, bitrate, method, performance)
+    cmd += recorder.capture_video_args(w, h, fps, encoder, bitrate, method, performance,
+                                       bool(cfg.get("recording.compact_video")))
     cmd += ["-t", str(seconds), "-movflags", "+faststart", str(out_path)]
 
     log(f"Screen capture test via {method} ({fps} fps, {encoder}, {seconds}s)")

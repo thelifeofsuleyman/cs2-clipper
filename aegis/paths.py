@@ -59,9 +59,15 @@ def montages_dir() -> Path:
     return _sub("montages")
 
 
-def clips_dir() -> Path:
-    """Where the built-in recorder writes saved clips (OBS backend uses its own)."""
-    return _sub("clips")
+def clips_dir(folder: str = "") -> Path:
+    """Directory for new saved clips. The rolling buffer stays in app data."""
+    if not folder:
+        return _sub("clips")
+    path = Path(folder)
+    if not path.is_absolute() or folder.startswith(("\\\\?\\", "\\\\.\\")):
+        raise ValueError("Choose an absolute folder path.")
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def buffer_dir() -> Path:

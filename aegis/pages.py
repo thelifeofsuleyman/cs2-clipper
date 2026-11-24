@@ -89,6 +89,8 @@ main{width:100%;max-width:min(1560px,96vw);margin:0 auto;padding:clamp(16px,2.2v
 .dialog h3{margin:0 0 8px;font-size:17px}
 .dialog p{margin:0 0 18px;color:var(--muted);font-size:13.5px;line-height:1.6}
 .dialog-actions{display:flex;gap:10px;flex-wrap:wrap}
+dialog.dialog{color:var(--txt);width:min(430px,calc(100% - 32px))}
+dialog::backdrop{background:#000a}
 .bar{display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap}
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(8px);
   background:var(--panel2);border:1px solid var(--line2);padding:12px 18px;border-radius:var(--r);
@@ -226,6 +228,15 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 </div>
 
 <div class=modal id=modal role=dialog aria-modal=true aria-label="Video player"><button class=close id=modalClose aria-label="Close video"><svg class=ico viewBox="0 0 24 24"><line x1=18 y1=6 x2=6 y2=18/><line x1=6 y1=6 x2=18 y2=18/></svg></button><video id=player controls playsinline></video><p class=player-error id=playerError hidden>Could not play this video. It may have moved or use an unsupported format.</p></div>
+<dialog class=dialog id=shareDialog aria-labelledby=shareTitle>
+  <h3 id=shareTitle>Share clip</h3>
+  <p>Save a copy to attach anywhere, or send it to a connected destination.</p>
+  <div class=dialog-actions>
+    <a class=settings-link id=downloadClip download>Download video</a>
+    <button id=sendClip hidden>Send to destinations</button>
+    <button class=ghost id=closeShare>Close</button>
+  </div>
+</dialog>
 %EXIT_DIALOG%
 <div class=toast id=toast role=status></div>
 
@@ -244,6 +255,7 @@ const ic=n=>`<svg class=ico viewBox="0 0 24 24">${ICONS[n]||''}</svg>`;
 const PLAY=`<div class=play><div class=pbtn>${ic('play')}</div></div>`;
 let library = [], activePage = 'clips', clipRequest = 0, fingerprint = '';
 let playerTrigger;
+let shareId;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
   '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
 }[ch]));
@@ -268,6 +280,7 @@ for (const b of $$('.rail button[data-tab]')) b.onclick = () => openTab(b.datase
 
 async function loadStatus() {
   const s = await api('/api/status');
+  $('#sendClip').hidden = !(s.enabled_targets || []).some(name => name !== 'gallery');
   const rec = s.recorder || {};
   const replay = $('#saveReplay');
   const states = {
@@ -278,7 +291,8 @@ async function loadStatus() {
   };
   const status = s.error ? ['Aegis disconnected', s.error] : s.capturing
     ? ['Replay buffer ready', s.gsi_connected
-      ? 'CS2 is connected. Highlights save automatically when your streak ends.'
+      ? (s.automatic_highlights === false ? 'Automatic highlights are off. You can still save replays.'
+         : 'CS2 is connected. Highlights save automatically when your streak ends.')
       : 'You can save replays now. Automatic highlights will start once CS2 sends game updates.']
     : states[rec.state] || states.idle;
   if ($('#captureTitle').textContent !== status[0]) $('#captureTitle').textContent = status[0];
@@ -395,12 +409,11 @@ function bindCard(card) {
     if (activePage === 'favorites') renderClips();
   });
   const share = card.querySelector('[data-share]');
-  share.onclick = () => busy(share, '', async () => {
-    const r = await api(clipApi(id) + '/share', {method:'POST'}, 320000);
-    const statuses = Object.entries(r.results || {}).filter(([name]) => name !== 'gallery');
-    toast(r.error || (statuses.length ? statuses.map(([name, status]) => name + ' · ' + status).join(' | ') : 'No sharing destinations are enabled.'));
-    await loadClips();
-  });
+  share.onclick = () => {
+    shareId = id;
+    $('#downloadClip').href = clipMedia(id, 'download');
+    $('#shareDialog').showModal();
+  };
   const remove = card.querySelector('[data-delete]');
   remove.onclick = () => {
     if (!confirm('Delete this clip and its video file?')) return;
@@ -413,6 +426,16 @@ function bindCard(card) {
 
 $('#clipSearch').oninput = renderClips;
 $('#clipFilter').onchange = renderClips;
+$('#closeShare').onclick = () => $('#shareDialog').close();
+$('#downloadClip').onclick = () => $('#shareDialog').close();
+$('#sendClip').onclick = () => busy($('#sendClip'), 'Sending…', async () => {
+  const id = shareId;
+  $('#shareDialog').close();
+  const r = await api(clipApi(id) + '/share', {method:'POST'}, 320000);
+  const statuses = Object.entries(r.results || {}).filter(([name]) => name !== 'gallery');
+  toast(r.error || (statuses.length ? statuses.map(([name, status]) => name + ' · ' + status).join(' | ') : 'No sharing destinations are enabled.'));
+  await loadClips();
+});
 async function loadLogs() {
   const r = await api('/api/logs');
   const box = $('#logBox');
@@ -553,6 +576,7 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
   <div class=settings-layout>
   <nav class=settings-nav aria-label="Settings sections">
     <a class=rail-item href="#recording">Recording</a>
+    <a class=rail-item href="#storage">Storage</a>
     <a class=rail-item href="#connection">CS2 connection</a>
     <a class=rail-item href="#highlights">Highlights</a>
     <a class=rail-item href="#capture-test">Test recording</a>
@@ -577,9 +601,15 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
     <div class=row><label for=rec_backend>Recorder</label><select id=rec_backend>
       <option value=builtin>Built-in</option><option value=obs>OBS Studio</option>
     </select></div>
+    <div class=row><label for=replay_hotkey>Save replay shortcut<small>Press a key combination here, then save. The shortcut works while Aegis runs in the background.</small></label>
+      <div><input id=replay_hotkey readonly placeholder="Press a shortcut">
+      <button class=ghost id=clearHotkey>Clear</button>
+      <p class=statusline id=hotkeyStatus role=status></p></div>
+    </div>
     <div id=builtinFields>
     <div class=row><label for=rec_clip>Manual replay length<small>Seconds saved by Save replay.</small></label><input type=number id=rec_clip min=5 max=120 value=30></div>
     <div class=row><label for=speaker_audio>Capture speaker audio<small>Includes all sounds on the default Windows playback device.</small></label><input type=checkbox id=speaker_audio></div>
+    <div class=row><label for=rec_compact>Compact recording<small>Uses less video bitrate while keeping the recording resolution and frame rate. Fine detail can change.</small></label><input type=checkbox id=rec_compact></div>
     <div class=row><label for=rec_performance>Prioritize game FPS<small>Records at up to 30 FPS, uses the GPU directly when supported, and skips highlight effects.</small></label><input type=checkbox id=rec_performance checked></div>
     <div class=row><label for=rec_gate>Capture only while CS2 is open</label><input type=checkbox id=rec_gate checked></div>
     <details id=qualityDetails><summary>Advanced capture quality</summary>
@@ -596,6 +626,14 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
       <div class=row><label for=obs_password>Password</label><input id=obs_password type=password></div>
     </div>
   </section>
+  <section class=step id=storage data-settings-panel hidden>
+    <h2>Clip storage</h2>
+    <p class=hint>Choose where Aegis saves new clips. Clips already in the library keep their original location.</p>
+    <div class=row><label for=clips_dir>Save clips to<small>Leave blank to use the default Aegis folder.</small></label>
+      <div><input id=clips_dir placeholder="Default clips folder" spellcheck=false>
+      <button class=ghost id=browseClips hidden>Browse folders</button></div>
+    </div>
+  </section>
   <section class=step id=capture-test data-settings-panel hidden>
     <h2>Test recording</h2>
     <p class=hint id=testHelp>Record five seconds of your screen outside a match. Test clips are saved in your library.</p>
@@ -609,6 +647,12 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
   <section class=step id=highlights data-settings-panel hidden>
     <h2>Automatic highlights</h2>
     <p class=hint>Aegis joins short moments around kills and cuts longer gaps between them.</p>
+    <div class=row><label for=highlight_modes>Record highlights in</label><select id=highlight_modes>
+      <option value=no_deathmatch>All modes except Deathmatch</option>
+      <option value=competitive>Competitive, Premier, and Wingman</option>
+      <option value=all>All modes</option>
+      <option value=off>Off · manual replays only</option>
+    </select></div>
     <div class=row><label for=debounce>Streak gap in seconds<small>Aegis waits this long after a kill before saving the streak.</small></label><input id=debounce type=number min=1 max=30 step=.1 value=7></div>
     <div class=row><label for=minkills>Minimum kills</label><input id=minkills type=number min=1 max=10 value=1></div>
     <div class=row><label for=polish_en>Add clip intro and fades<small id=effectsHint></small></label><input type=checkbox id=polish_en checked></div>
@@ -685,6 +729,9 @@ async function loadExisting() {
   $('#rec_preset').value = r.preset || 'medium';
   $('#rec_performance').checked = r.prioritize_game_fps !== false;
   $('#speaker_audio').checked = Boolean(r.speaker_audio);
+  $('#rec_compact').checked = Boolean(r.compact_video);
+  $('#clips_dir').value = (c.storage || {}).clips_dir || '';
+  $('#replay_hotkey').value = (c.hotkeys || {}).replay || '';
   $('#rec_clip').value = r.clip_seconds ?? 30;
   $('#rec_gate').checked = r.only_when_game_running !== false;
   $('#polish_en').checked = (c.polish || {}).enabled !== false;
@@ -693,6 +740,7 @@ async function loadExisting() {
   $('#obs_password').value = o.password || '';
   $('#debounce').value = e.debounce_sec ?? 7;
   $('#minkills').value = e.min_kills ?? 1;
+  $('#highlight_modes').value = e.highlight_modes || 'no_deathmatch';
   $('#cs2_cfg_dir').value = e.cs2_cfg_dir || '';
   $('#tg_en').checked = !!tg.enabled;
   $('#tg_token').value = tg.bot_token || '';
@@ -705,17 +753,22 @@ async function loadExisting() {
   savedSettings = readSettings();
   renderSettings();
   showSettingsSection(location.hash.slice(1));
+  refreshShortcutStatus();
 }
 function readSettings() {
   const backend = $('#rec_backend').value;
   const clip = $('#rec_clip');
   const port = $('#obs_port');
   return {
+    storage:{clips_dir:$('#clips_dir').value.trim()},
+    hotkeys:{replay:$('#replay_hotkey').value},
     engine:{debounce_sec:$('#debounce').valueAsNumber, min_kills:$('#minkills').valueAsNumber,
+      highlight_modes:$('#highlight_modes').value,
       cs2_cfg_dir:$('#cs2_cfg_dir').value.trim()},
     recording:{backend, preset:$('#rec_preset').value,
       prioritize_game_fps:$('#rec_performance').checked,
       speaker_audio:$('#speaker_audio').checked,
+      compact_video:$('#rec_compact').checked,
       clip_seconds:backend === 'obs' && (!clip.value || !clip.checkValidity()) ? savedSettings?.recording.clip_seconds : clip.valueAsNumber,
       only_when_game_running:$('#rec_gate').checked},
     polish:{enabled:$('#polish_en').checked},
@@ -777,6 +830,7 @@ async function save() {
   } else {
     savedSettings = snapshot;
     renderSettings(hasChanges() ? 'Unsaved changes' : 'Settings saved.', hasChanges() ? '' : 'ok');
+    setTimeout(refreshShortcutStatus, 600);
   }
   return r.ok;
 }
@@ -790,6 +844,45 @@ function runSettings(button, label, action) {
   });
 }
 document.querySelector('.settings-layout').addEventListener('input', () => renderSettings());
+async function refreshShortcutStatus() {
+  if (!savedSettings || $('#replay_hotkey').value !== savedSettings.hotkeys.replay) return;
+  const state = await api('/api/status');
+  const text = {active:'Shortcut active', unavailable:'Windows could not register this shortcut. Try another.'};
+  if ($('#replay_hotkey').value === savedSettings.hotkeys.replay) {
+    message('#hotkeyStatus', text[state.replay_hotkey] || '', state.replay_hotkey === 'unavailable' ? 'err' : '');
+  }
+}
+$('#replay_hotkey').onkeydown = event => {
+  const key = /^Digit([0-9])$/.exec(event.code)?.[1] || event.key.toUpperCase();
+  if (key === 'TAB' || key === 'ESCAPE') return;
+  event.preventDefault();
+  if (['CONTROL', 'ALT', 'SHIFT', 'META'].includes(key)) return;
+  if (event.metaKey || !(event.ctrlKey || event.altKey) || !/^(?:[A-Z0-9]|F(?:[1-9]|1[01]))$/.test(key)) {
+    message('#hotkeyStatus', 'Use Ctrl or Alt with a letter, number, or F1–F11.', 'err');
+    return;
+  }
+  const keys = [event.ctrlKey && 'Ctrl', event.altKey && 'Alt', event.shiftKey && 'Shift', key];
+  $('#replay_hotkey').value = keys.filter(Boolean).join('+');
+  message('#hotkeyStatus', '');
+  renderSettings();
+};
+$('#clearHotkey').onclick = () => {
+  $('#replay_hotkey').value = '';
+  message('#hotkeyStatus', '');
+  renderSettings();
+};
+function enableFolderPicker() {
+  $('#browseClips').hidden = !window.pywebview?.api?.choose_clips_folder;
+}
+window.addEventListener('pywebviewready', enableFolderPicker);
+enableFolderPicker();
+$('#browseClips').onclick = () => runSettings($('#browseClips'), 'Choosing…', async () => {
+  const chosen = await window.pywebview.api.choose_clips_folder();
+  if (chosen) {
+    $('#clips_dir').value = chosen;
+    renderSettings();
+  }
+});
 $('#discardBtn').onclick = () => runSettings($('#discardBtn'), 'Restoring…', loadExisting);
 $('#backToLibrary').onclick = event => {
   if ((hasChanges() || settingsBusy) && !confirm('Leave settings? Any unsaved changes will be lost.')) event.preventDefault();

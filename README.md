@@ -34,6 +34,15 @@ tray icon reopens the library.
 
 Automatic highlights keep the moments around each kill and cut longer gaps
 between them. **Save replay** saves a continuous window of the configured length.
+Automatic highlights skip Deathmatch by default. Change the mode filter in
+**Settings → Highlights**, or turn them off for manual replays only. Kills by
+the person you are spectating don't trigger a clip. Set a global replay shortcut
+under **Settings → Recording** to save a replay during a match.
+
+Use **Settings → Storage** to pick the folder for new clips. **Share → Download
+video** exports the original file without an account. **Compact recording** in
+Recording settings reduces bitrate for future built-in captures while keeping
+their resolution and frame rate. The exact file size and detail depend on the scene.
 
 To include audio with the built-in recorder, turn on **Capture speaker audio**
 under **Settings → Recording**. This records sound from the default Windows

@@ -26,9 +26,12 @@ from .log import log
 
 DEFAULTS: dict[str, Any] = {
     "first_run": True,
+    "storage": {"clips_dir": ""},
+    "hotkeys": {"replay": ""},
     "engine": {
         "debounce_sec": 7.0,     # seconds of no-kill before a streak is clipped
         "min_kills": 1,          # 2 = skip solo kills
+        "highlight_modes": "no_deathmatch",
         "clip_wait_sec": 8.0,    # how long to wait for OBS to finish writing
         "gsi_port": 3000,        # CS2 GSI POST target (matches the .cfg)
         "cs2_cfg_dir": "",       # optional override for custom Steam installs
@@ -41,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
         "capture": "ddagrab",          # ddagrab (fullscreen-safe) | gdigrab
         "prioritize_game_fps": True,   # direct GPU capture and lighter in-game processing
         "speaker_audio": False,        # opt in to recording the default playback device
+        "compact_video": False,        # quality-based encoding for smaller clips
         "buffer_seconds": 45,          # rolling buffer length kept on disk
         "clip_seconds": 30,            # how much to save per kill streak
         "segment_time": 2,             # rolling-buffer segment granularity

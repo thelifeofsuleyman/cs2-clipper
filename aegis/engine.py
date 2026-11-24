@@ -31,6 +31,7 @@ from .log import log
 from .recorder import HIGHLIGHT_HISTORY, highlight_ranges, make_recorder
 
 KILL_LABELS = {1: "Kill", 2: "Double tap", 3: "TRIPLE", 4: "QUAD", 5: "ACE"}
+COMPETITIVE_MODES = {"competitive", "premier", "wingman", "scrimcomp2v2"}
 
 
 def kill_basename(map_name: str, kills: int) -> str:
@@ -55,6 +56,7 @@ class Engine:
         self.cfg = cfg
         self.catalog = catalog
         self.recorder = make_recorder(cfg)
+        self.replay_hotkey_state = "off"
         self._lock = threading.Lock()
         self._rec_lock = threading.Lock()   # serializes recorder start/stop/restart
         self._save_lock = threading.Lock()
@@ -70,6 +72,7 @@ class Engine:
         self._kill_events: list[tuple[float, int]] = []
         self._last_player = ""
         self._last_map = ""
+        self._last_mode = ""
         self._state = {
             "last_match_kills": -1,
             "pending_kills": 0,
@@ -102,6 +105,7 @@ class Engine:
         if type(current_kills) is not int or current_kills < 0:
             return
         map_name = str(map_obj.get("name") or "")
+        mode = str(map_obj.get("mode") or "").strip().lower()
         round_value = map_obj.get("round", 0)
         round_n = round_value if type(round_value) is int else 0
         team = str(player.get("team") or "?").upper()
@@ -109,8 +113,11 @@ class Engine:
         steam_id = observed or owner
 
         with self._lock:
+            if not owner and observed and self._last_player and observed != self._last_player:
+                return
             prev = self._state["last_match_kills"]
             changed_match = ((map_name and self._last_map and map_name != self._last_map)
+                             or (mode and self._last_mode and mode != self._last_mode)
                              or (steam_id and self._last_player and steam_id != self._last_player))
             self._last_map = map_name or self._last_map
             self._last_player = steam_id or self._last_player
@@ -123,12 +130,14 @@ class Engine:
                 self._timer_token = None
                 self._last_kill_at = None
                 self._kill_events.clear()
+                self._last_mode = mode
                 self._state.update(last_match_kills=current_kills, pending_kills=0)
                 return
 
             diff = current_kills - prev
             self._state["last_match_kills"] = current_kills
-            if diff <= 0:
+            self._last_mode = mode or self._last_mode
+            if diff <= 0 or not self._mode_allows_highlights(self._last_mode):
                 return
 
             now = time.monotonic()
@@ -158,6 +167,14 @@ class Engine:
         self._timer = t
         t.start()
 
+    def _mode_allows_highlights(self, mode: str) -> bool:
+        setting = self.cfg.get("engine.highlight_modes", "no_deathmatch")
+        if setting == "off":
+            return False
+        if setting == "competitive":
+            return mode in COMPETITIVE_MODES
+        return setting == "all" or mode != "deathmatch"
+
     # ───────── recorder lifecycle ─────────
     def start_recording(self) -> None:
         with self._rec_lock:
@@ -182,11 +199,14 @@ class Engine:
         with self._lock:
             pending = self._state["pending_kills"]
             last_gsi = self._last_gsi
+            mode = self._last_mode
         rec = self.recorder.status()
         return {
             "recorder": rec,
             "capturing": rec.get("capturing", False),
             "pending_kills": pending,
+            "automatic_highlights": self._mode_allows_highlights(mode),
+            "replay_hotkey": self.replay_hotkey_state,
             "gsi_connected": bool(last_gsi and time.monotonic() - last_gsi < 25),
             "enabled_targets": [
                 name for name, _ in uploaders.REGISTRY
@@ -198,6 +218,9 @@ class Engine:
         with self._lock:
             return {"attempts": self._save_attempts, "saved": self._save_successes,
                     "last_save_ms": self._last_save_ms}
+
+    def clips_dir(self) -> Path:
+        return paths.clips_dir(self.cfg.get("storage.clips_dir", ""))
 
     def _record_replay(self, seconds: float, destination: Path,
                        ranges: list[tuple[float, float]] | None = None) -> Path | None:
@@ -232,13 +255,14 @@ class Engine:
             last_kill = self._last_kill_at
             kills = self._state["pending_kills"]
             events = self._kill_events[:]
+            mode = self._last_mode
             map_name = self._state["map_name"]
             round_n = self._state["round_n"]
             side = self._state["side"]
             steam_name = self._state["steam_name"]
             steam_id = self._state["steam_id"]
 
-        if kills < int(self.cfg.get("engine.min_kills")):
+        if not self._mode_allows_highlights(mode) or kills < int(self.cfg.get("engine.min_kills")):
             self._consume_pending(kills, generation, len(events))
             return
 
@@ -256,8 +280,8 @@ class Engine:
             self._consume_pending(kills, generation, len(events))
             return
         log(f"Saving highlight for {recent_kills} kill(s)")
-        raw_tmp = paths.clips_dir() / f".raw_{uuid.uuid4().hex[:8]}.mp4"
         try:
+            raw_tmp = self.clips_dir() / f".raw_{uuid.uuid4().hex[:8]}.mp4"
             clip_path = self._record_replay(clip_seconds, raw_tmp, highlight_ranges([stamp for stamp, _ in retained]))
         except Exception as e:
             log(f"Replay save failed: {e}")
@@ -310,14 +334,14 @@ class Engine:
     def _finalize_clip(self, src: Path, map_name: str, kills: int) -> Path:
         """Move the clip to a unique name, preserving its container extension."""
         base = kill_basename(map_name, kills)
-        d = paths.clips_dir()
-        suffix = src.suffix
-        dest = d / f"{base}{suffix}"
-        n = 2
-        while dest.exists():
-            dest = d / f"{base}_{n}{suffix}"
-            n += 1
         try:
+            d = self.clips_dir()
+            suffix = src.suffix
+            dest = d / f"{base}{suffix}"
+            n = 2
+            while dest.exists():
+                dest = d / f"{base}_{n}{suffix}"
+                n += 1
             shutil.move(str(src), str(dest))     # handles cross-volume (OBS dir)
             return dest
         except Exception as e:
@@ -372,7 +396,7 @@ class Engine:
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
             return {"ok": False, "detail": "ffmpeg not found — cannot make a test clip"}
-        out = paths.clips_dir() / f"test_{uuid.uuid4().hex[:10]}.mp4"
+        out = self.clips_dir() / f"test_{uuid.uuid4().hex[:10]}.mp4"
         if media.make_test_clip(ffmpeg, out, seconds=6) is None:
             return {"ok": False, "detail": "test clip generation failed"}
 
@@ -394,10 +418,17 @@ class Engine:
         return {"ok": True, "clip_id": clip.id}
 
     def save_replay(self) -> dict:
-        out = paths.clips_dir() / f"replay_{uuid.uuid4().hex[:10]}.mp4"
+        out = self.clips_dir() / f"replay_{uuid.uuid4().hex[:10]}.mp4"
         captured = self._record_replay(float(self.cfg.get("recording.clip_seconds", 30)), out)
         if not captured:
             return {"ok": False, "detail": "Replay buffer is unavailable. Check capture status and Activity."}
+        if self.cfg.get("storage.clips_dir") and captured.parent != out.parent:
+            destination = out.with_suffix(captured.suffix)
+            try:
+                shutil.move(str(captured), str(destination))
+                captured = destination
+            except OSError as exc:
+                log(f"Could not move the OBS replay to the clip folder: {exc}")
         clip = self._catalog_clip(captured, 0, "Manual replay", 0, "?")
         self.catalog.update(clip.id, title="Manual replay")
         return {"ok": True, "clip_id": clip.id}
@@ -408,7 +439,7 @@ class Engine:
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
             return {"ok": False, "detail": "ffmpeg not found"}
-        out = paths.clips_dir() / f"capture_test_{uuid.uuid4().hex[:10]}.mp4"
+        out = self.clips_dir() / f"capture_test_{uuid.uuid4().hex[:10]}.mp4"
         method = media.capture_screen_test(ffmpeg, out, seconds, self.cfg)
         if not method:
             return {"ok": False,

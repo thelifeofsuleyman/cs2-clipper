@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import tempfile
 import threading
 from pathlib import Path
 
@@ -176,6 +177,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
     # ───────── media streaming (range-enabled for seeking) ─────────
     @app.get("/clip/<clip_id>/video")
+    @app.get("/clip/<clip_id>/download")
     def clip_video(clip_id: str):
         c = catalog.get(clip_id)
         if not c or not c.exists():
@@ -184,7 +186,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         mime = {".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime"}
         if not path.is_file() or path.suffix.lower() not in mime:
             return "not found", 404
-        return send_file(path, conditional=True, mimetype=mime[path.suffix.lower()])
+        return send_file(path, conditional=True, mimetype=mime[path.suffix.lower()],
+                         as_attachment=request.path.endswith("/download"))
 
     @app.get("/clip/<clip_id>/thumb")
     def clip_thumb(clip_id: str):
@@ -237,6 +240,31 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         patch = request.get_json(silent=True)
         if not _valid_settings_patch(patch):
             return jsonify(error="Provide settings as a JSON object with settings groups."), 400
+        if patch.get("engine", {}).get("highlight_modes", "all") not in ("off", "all", "no_deathmatch", "competitive"):
+            return jsonify(error="Choose a supported automatic highlight mode."), 400
+        if "replay" in patch.get("hotkeys", {}):
+            from .hotkeys import parse_hotkey
+
+            shortcut = patch["hotkeys"]["replay"]
+            if not isinstance(shortcut, str):
+                return jsonify(error="Enter a valid replay shortcut."), 400
+            if shortcut:
+                try:
+                    parse_hotkey(shortcut)
+                except ValueError as exc:
+                    return jsonify(error=str(exc)), 400
+        if "clips_dir" in patch.get("storage", {}):
+            folder = patch["storage"]["clips_dir"]
+            if not isinstance(folder, str):
+                return jsonify(error="Choose a folder path."), 400
+            folder = folder.strip()
+            patch["storage"]["clips_dir"] = folder
+            if folder:
+                try:
+                    with tempfile.TemporaryFile(dir=paths.clips_dir(folder)):
+                        pass
+                except (OSError, ValueError):
+                    return jsonify(error="Choose an absolute folder path that Aegis can write to."), 400
         before = cfg.as_dict()
         cfg.update(patch)
         cfg.save()
@@ -345,8 +373,10 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
 # ───────── helpers ─────────
 _UI_SETTINGS = {
-    "engine": {"debounce_sec", "min_kills", "cs2_cfg_dir"},
-    "recording": {"backend", "preset", "prioritize_game_fps", "speaker_audio",
+    "storage": {"clips_dir"},
+    "hotkeys": {"replay"},
+    "engine": {"debounce_sec", "min_kills", "highlight_modes", "cs2_cfg_dir"},
+    "recording": {"backend", "preset", "prioritize_game_fps", "speaker_audio", "compact_video",
                   "clip_seconds", "only_when_game_running"},
     "polish": {"enabled"},
     "obs": {"replay_dir", "port", "password"},

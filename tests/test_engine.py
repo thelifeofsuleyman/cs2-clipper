@@ -83,6 +83,35 @@ def test_partial_gsi_and_spectator_updates_preserve_local_streak(cfg):
     eng._timer.cancel()
 
 
+def test_deathmatch_kills_advance_baseline_without_queuing_clips(cfg, monkeypatch):
+    eng = Engine(cfg, Catalog())
+    monkeypatch.setattr(eng, "_arm_timer", lambda: None)
+    for kills in range(45):
+        event = _gsi(kills)
+        event["map"]["mode"] = "deathmatch"
+        eng.handle_payload(event)
+    assert eng.status()["pending_kills"] == 0
+    assert eng.status()["automatic_highlights"] is False
+
+    cfg.set("engine.highlight_modes", "all")
+    event = _gsi(45)
+    event["map"]["mode"] = "deathmatch"
+    eng.handle_payload(event)
+    assert eng.status()["pending_kills"] == 1
+
+    cfg.set("engine.highlight_modes", "competitive")
+    for kills in (0, 1):
+        event = _gsi(kills)
+        event["map"]["mode"] = "competitive"
+        eng.handle_payload(event)
+    assert eng.status()["pending_kills"] == 1
+    assert eng.status()["automatic_highlights"] is True
+    cfg.set("engine.highlight_modes", "off")
+    eng._save_clip()
+    assert eng.status()["pending_kills"] == 0
+    assert eng.status()["automatic_highlights"] is False
+
+
 # ───────── debounce -> save -> catalog -> fan-out ─────────
 def test_streak_saves_and_catalogs(cfg):
     cfg.set("engine.debounce_sec", 0.1)

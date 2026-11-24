@@ -40,6 +40,32 @@ def test_browser_settings_cannot_change_execution_paths(app_client):
     assert cfg.get("ffmpeg_path") == ""
 
 
+def test_custom_folder_and_download_original(app_client, data_dir, monkeypatch):
+    from aegis.clips import Clip
+
+    client, cfg, catalog, engine = app_client
+    destination = data_dir / "saved clips"
+    assert client.post("/api/config", json={"storage": {"clips_dir": "relative"}}).status_code == 400
+    response = client.post("/api/config", json={"storage": {"clips_dir": str(destination)}})
+    assert response.status_code == 200 and cfg.get("storage.clips_dir") == str(destination)
+    old_file = data_dir / "old.mp4"
+    old_file.write_bytes(b"old video")
+    catalog.add(Clip(id="old", path=str(old_file), created=1))
+
+    def save(_seconds, path, _ranges):
+        assert path.parent == destination
+        path.write_bytes(b"new video")
+        return path
+
+    monkeypatch.setattr(engine.recorder, "save", save)
+    result = client.post("/api/replay").get_json()
+    assert result["ok"]
+    old = client.get("/clip/old/download")
+    assert old.headers["Content-Disposition"].startswith("attachment;")
+    assert old.data == b"old video"
+    assert client.get("/clip/" + result["clip_id"] + "/video").data == b"new video"
+
+
 def test_config_restarts_only_the_active_recorder(app_client, monkeypatch):
     client, cfg, _, engine = app_client
     cfg.set("first_run", False)
