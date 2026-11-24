@@ -196,20 +196,22 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
     @app.get("/api/detect")
     def api_detect():
-        from . import media, recorder
+        from . import media
         cs2 = _find_gsi_dir(cfg)
         ffmpeg = media.resolve_ffmpeg(cfg.get("ffmpeg_path", ""))
-        encoder, gpu = "", False
-        if ffmpeg:
-            encoder = recorder.pick_encoder(recorder._encoders_text(ffmpeg),
-                                            cfg.get("recording.encoder", "auto"))
-            gpu = encoder != "libx264"
+        # Report the running encoder, if any. Spawning FFmpeg to list compiled
+        # encoders can hang first-run detection on a cold Windows launch.
+        encoder = ""
+        if cfg.get("recording.backend") == "builtin":
+            status = engine.recorder.status()
+            if status.get("capturing"):
+                encoder = status.get("encoder", "")
         return jsonify(
             cs2_cfg_dir=str(cs2) if cs2 else "",
             gsi_installed=bool(cs2 and _gsi_is_current(cs2, int(cfg.get("engine.gsi_port")))),
             ffmpeg=ffmpeg or "",
             encoder=encoder,
-            gpu_accel=gpu,
+            gpu_accel=bool(encoder and encoder != "libx264"),
             obs_replay_dir=str(config.detect_obs_replay_dir() or ""),
         )
 
