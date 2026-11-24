@@ -74,7 +74,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         recorder_status = status["recorder"]
         return jsonify(
             version=__version__,
-            capture={key: recorder_status[key] for key in ("backend", "state", "encoder", "method", "fps")
+            capture={key: recorder_status[key] for key in ("backend", "state", "encoder", "method", "fps", "audio")
                      if key in recorder_status},
             buffer_ready=status["capturing"],
             game_updates_connected=status["gsi_connected"],

@@ -41,14 +41,14 @@ def test_recorder_stop_is_safe_without_start(cfg):
 class _FailRecorder:
     def start(self): pass
     def stop(self): pass
-    def save(self, seconds, out): return None   # always "fails"
+    def save(self, seconds, out, ranges=None): return None
     def status(self): return {"backend": "fail", "capturing": False, "encoder": "x"}
 
 
 class _OkRecorder:
     def start(self): pass
     def stop(self): pass
-    def save(self, seconds, out: Path):
+    def save(self, seconds, out: Path, ranges=None):
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"x" * 512)
         return out

@@ -285,12 +285,14 @@ async function loadStatus() {
   const detail = s.pending_kills && s.capturing && s.gsi_connected
     ? s.pending_kills + (s.pending_kills === 1 ? ' kill in the current highlight.' : ' kills in the current highlight.')
     : status[1];
-  if ($('#captureDetail').textContent !== detail) $('#captureDetail').textContent = detail;
+  const audio = rec.audio === 'unavailable' ? ' Speaker audio is unavailable.' : '';
+  if ($('#captureDetail').textContent !== detail + audio) $('#captureDetail').textContent = detail + audio;
   $('#capturePanel').dataset.ready = Boolean(s.capturing);
   $('#connectionLink').hidden = Boolean(s.gsi_connected);
   replay.disabled = !s.capturing || replay.getAttribute('aria-busy') === 'true';
   $('#footStatus').textContent = rec.encoder && rec.encoder !== '?' ? rec.encoder +
-    (rec.method ? ' · ' + rec.method : '') + (rec.fps ? ' · capture target ' + rec.fps + ' fps' : '') : '';
+    (rec.method ? ' · ' + rec.method : '') + (rec.fps ? ' · capture target ' + rec.fps + ' fps' : '') +
+    (rec.audio ? ' · speaker audio ' + rec.audio : '') : '';
 }
 
 $('#saveReplay').onclick = () => busy($('#saveReplay'), 'Saving replay…', async () => {
@@ -343,7 +345,7 @@ function renderClips() {
   }
   g.innerHTML = clips.map(c => {
     const id = escape(c.id), title = escape(c.title || 'Untitled');
-    const kill = c.kills >= 5 ? 'ACE' : c.kills ? c.kills + 'K' : '';
+    const kill = c.kills === 5 ? 'ACE' : c.kills ? c.kills + 'K' : '';
     const statuses = Object.entries(c.uploads || {}).filter(([name]) => name !== 'gallery');
     const targets = statuses.map(([name, status]) =>
       '<span class="tg ' + (status === 'ok' ? 'ok' : 'err') + '" title="' + escape(status) + '">' + escape(name) + '</span>').join('');
@@ -572,11 +574,12 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
   </section>
   <section class=step id=recording data-settings-panel hidden>
     <h2>Recording</h2>
-    <div class=row><label for=rec_backend>Recorder<small>Use OBS Replay Buffer for game audio.</small></label><select id=rec_backend>
-      <option value=builtin>Built-in · video only</option><option value=obs>OBS Studio</option>
+    <div class=row><label for=rec_backend>Recorder</label><select id=rec_backend>
+      <option value=builtin>Built-in</option><option value=obs>OBS Studio</option>
     </select></div>
     <div id=builtinFields>
-    <div class=row><label for=rec_clip>Replay length in seconds</label><input type=number id=rec_clip min=5 max=120 value=30></div>
+    <div class=row><label for=rec_clip>Manual replay length<small>Seconds saved by Save replay.</small></label><input type=number id=rec_clip min=5 max=120 value=30></div>
+    <div class=row><label for=speaker_audio>Capture speaker audio<small>Includes all sounds on the default Windows playback device.</small></label><input type=checkbox id=speaker_audio></div>
     <div class=row><label for=rec_performance>Prioritize game FPS<small>Records at up to 30 FPS, uses the GPU directly when supported, and skips highlight effects.</small></label><input type=checkbox id=rec_performance checked></div>
     <div class=row><label for=rec_gate>Capture only while CS2 is open</label><input type=checkbox id=rec_gate checked></div>
     <details id=qualityDetails><summary>Advanced capture quality</summary>
@@ -605,6 +608,7 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
   </section>
   <section class=step id=highlights data-settings-panel hidden>
     <h2>Automatic highlights</h2>
+    <p class=hint>Aegis joins short moments around kills and cuts longer gaps between them.</p>
     <div class=row><label for=debounce>Streak gap in seconds<small>Aegis waits this long after a kill before saving the streak.</small></label><input id=debounce type=number min=1 max=30 step=.1 value=7></div>
     <div class=row><label for=minkills>Minimum kills</label><input id=minkills type=number min=1 max=10 value=1></div>
     <div class=row><label for=polish_en>Add clip intro and fades<small id=effectsHint></small></label><input type=checkbox id=polish_en checked></div>
@@ -680,6 +684,7 @@ async function loadExisting() {
   $('#rec_backend').value = r.backend === 'obs' ? 'obs' : 'builtin';
   $('#rec_preset').value = r.preset || 'medium';
   $('#rec_performance').checked = r.prioritize_game_fps !== false;
+  $('#speaker_audio').checked = Boolean(r.speaker_audio);
   $('#rec_clip').value = r.clip_seconds ?? 30;
   $('#rec_gate').checked = r.only_when_game_running !== false;
   $('#polish_en').checked = (c.polish || {}).enabled !== false;
@@ -710,6 +715,7 @@ function readSettings() {
       cs2_cfg_dir:$('#cs2_cfg_dir').value.trim()},
     recording:{backend, preset:$('#rec_preset').value,
       prioritize_game_fps:$('#rec_performance').checked,
+      speaker_audio:$('#speaker_audio').checked,
       clip_seconds:backend === 'obs' && (!clip.value || !clip.checkValidity()) ? savedSettings?.recording.clip_seconds : clip.valueAsNumber,
       only_when_game_running:$('#rec_gate').checked},
     polish:{enabled:$('#polish_en').checked},
@@ -733,7 +739,7 @@ function renderSettings(status, type) {
   $('#captureBtn').hidden = obs;
   $('#qualityHint').textContent = prioritize ? 'Direct GPU capture uses desktop resolution and runs at up to 30 FPS.' : '';
   $('#testHelp').textContent = obs ? 'Start Replay Buffer in OBS, then use Save replay in the library. A sample clip checks playback.' :
-    'Record five seconds of your screen outside a match. Test clips are saved in your library.';
+    'Check five seconds of screen video outside a match. To check speaker audio, use Save replay while CS2 is open and playing sound.';
   $('#polish_en').disabled = prioritize;
   $('#effectsHint').textContent = prioritize ? 'Paused while Prioritize game FPS is on.' : '';
   if (!savedSettings) return;

@@ -51,6 +51,20 @@ def test_pick_segments_caps_at_available():
     assert len(segs) <= 3
 
 
+def test_spaced_kills_keep_their_own_segments():
+    ranges = recorder.highlight_ranges([7, 9, 17])
+    assert ranges == [(5, 10), (15, 18)]
+    entries = [(path, end * 2) for path, end in _entries(11)]
+    assert recorder.highlight_segments(entries, ranges, segment_time=2) == [
+        Path(f"seg_{i:03d}.ts") for i in (3, 4, 5, 8, 9)
+    ]
+    jittered = [(path, end - 0.01) for path, end in entries]
+    assert recorder.highlight_segments(jittered, ranges, segment_time=2) == [
+        Path(f"seg_{i:03d}.ts") for i in (3, 4, 5, 8, 9)
+    ]
+    assert recorder.highlight_segments(entries[:-1], ranges, segment_time=2) == []
+
+
 # ───────── build_capture_cmd ─────────
 def test_build_capture_cmd_ddagrab_nvenc():
     cmd = recorder.build_capture_cmd(

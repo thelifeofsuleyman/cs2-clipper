@@ -11,7 +11,7 @@
 # To bundle ffmpeg, drop ffmpeg.exe (and ffprobe.exe) into packaging/vendor/
 # before building; otherwise the app falls back to ffmpeg on PATH at runtime.
 import os
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all, copy_metadata
 
 # NOTE: PyInstaller runs a .spec with the cwd set to the spec file's own folder,
 # so os.getcwd() is packaging/, NOT the repo root. PyInstaller injects SPECPATH
@@ -20,6 +20,9 @@ from PyInstaller.utils.hooks import collect_submodules, collect_data_files, coll
 ROOT = os.path.dirname(os.path.abspath(SPECPATH))
 
 datas = [(os.path.join(ROOT, "cfg", "gamestate_integration_aegis_clipper.cfg"), "cfg")]
+if os.name == "nt":
+    # Ship the loopback dependency's license along with its native extension.
+    datas += copy_metadata("PyAudioWPatch")
 
 # pywebview ships runtime JS (webview/js/*.js) that must be bundled, and on
 # Windows uses pythonnet (clr) for the EdgeChromium backend. Collect both

@@ -62,7 +62,18 @@ def probe_duration(ffmpeg: str, video: Path) -> float:
     return stream_info(ffmpeg, video)[0]
 
 
+def mux_speaker_audio(video_args: list[str], wav: Path, output: list[str]) -> subprocess.CompletedProcess:
+    return _run([*video_args, "-i", str(wav), "-map", "0:v:0", "-map", "1:a:0",
+                 "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-af", "apad",
+                 "-shortest", *output], timeout=20)
+
+
 def stream_info(ffmpeg: str, video: Path) -> tuple[float, bool]:
+    duration, audio_tracks = _stream_details(ffmpeg, video)
+    return duration, bool(audio_tracks)
+
+
+def _stream_details(ffmpeg: str, video: Path) -> tuple[float, int]:
     ffprobe = Path(ffmpeg).with_name("ffprobe" + (".exe" if sys.platform == "win32" else ""))
     probe = str(ffprobe) if ffprobe.is_file() else shutil.which("ffprobe")
     try:
@@ -72,13 +83,13 @@ def stream_info(ffmpeg: str, video: Path) -> tuple[float, bool]:
             if r.returncode == 0:
                 info = json.loads(r.stdout)
                 duration = float(info.get("format", {}).get("duration", 0) or 0)
-                return duration, any(s.get("codec_type") == "audio" for s in info.get("streams", []))
+                return duration, sum(s.get("codec_type") == "audio" for s in info.get("streams", []))
         r = _run([ffmpeg, "-hide_banner", "-i", str(video)], timeout=8)
         stamp = re.search(r"Duration: (\d+):(\d+):([\d.]+)", r.stderr)
         duration = (int(stamp[1]) * 3600 + int(stamp[2]) * 60 + float(stamp[3])) if stamp else 0.0
-        return duration, bool(re.search(r"Stream .*?: Audio:", r.stderr))
+        return duration, len(re.findall(r"Stream .*?: Audio:", r.stderr))
     except (OSError, ValueError, subprocess.SubprocessError):
-        return 0.0, False
+        return 0.0, 0
 
 
 def quality_encode_args(ffmpeg: str, cfg) -> list[str]:
@@ -98,6 +109,45 @@ def quality_encode_args(ffmpeg: str, cfg) -> list[str]:
         return ["-c:v", "h264_qsv", "-preset", "faster", "-global_quality", "23",
                 "-pix_fmt", "yuv420p"]
     return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
+
+
+def trim_replay(ffmpeg: str, source: Path, destination: Path, replay_end: float,
+                ranges: list[tuple[float, float]], cfg) -> Path | None:
+    duration, audio_tracks = _stream_details(ffmpeg, source)
+    replay_start = replay_end - duration
+    edits = [(max(0.0, start - replay_start), min(duration, stop - replay_start))
+             for start, stop in ranges]
+    edits = [(start, stop) for start, stop in edits if stop - start >= 0.1]
+    if not edits:
+        log("OBS replay contained no footage from the kill windows")
+        return None
+
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-filter_complex_threads", "2"]
+    streams = []
+    for index, (start, stop) in enumerate(edits):
+        cmd += ["-ss", f"{start:.3f}", "-t", f"{stop - start:.3f}", "-threads", "2", "-i", str(source)]
+        streams.append(f"[{index}:v:0]" + "".join(f"[{index}:a:{track}]" for track in range(audio_tracks)))
+    audio_labels = [f"[a{track}]" for track in range(audio_tracks)]
+    output_labels = "[v]" + "".join(audio_labels)
+    graph = "".join(streams) + f"concat=n={len(edits)}:v=1:a={audio_tracks}" + output_labels
+    cmd += ["-filter_complex", graph, "-map", "[v]"]
+    for label in audio_labels:
+        cmd += ["-map", label]
+    if audio_tracks:
+        cmd += ["-c:a", "aac", "-b:a", "160k"]
+    end = ["-movflags", "+faststart", str(destination)]
+    encode = quality_encode_args(ffmpeg, cfg)
+    fallback = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-threads", "2", "-pix_fmt", "yuv420p"]
+    for settings in (encode, fallback):
+        try:
+            result = _run([*cmd, *settings, *end], timeout=90)
+            if result.returncode == 0 and destination.exists() and destination.stat().st_size:
+                return destination
+            log(f"OBS highlight trim failed: {result.stderr[-200:]}")
+        except (OSError, subprocess.SubprocessError) as exc:
+            log(f"OBS highlight trim failed: {exc}")
+    destination.unlink(missing_ok=True)
+    return None
 
 
 def make_test_clip(ffmpeg: str | None, out_path: Path, seconds: int = 5) -> Path | None:

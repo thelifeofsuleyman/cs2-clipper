@@ -32,9 +32,14 @@ tray icon reopens the library.
   to 30 fps and uses direct GPU capture at desktop resolution when available.
   Turn it off to use a fixed quality preset or enable automatic clip effects.
 
-The built-in recorder captures video. To include game audio, enable **Use OBS
-instead** in Aegis and configure audio sources, Replay Buffer, and the WebSocket
-server in OBS.
+Automatic highlights keep the moments around each kill and cut longer gaps
+between them. **Save replay** saves a continuous window of the configured length.
+
+To include audio with the built-in recorder, turn on **Capture speaker audio**
+under **Settings → Recording**. This records sound from the default Windows
+playback device, including other apps using it. To capture CS2 audio separately,
+choose **OBS Studio** and configure an Application Audio Capture source, Replay
+Buffer, and the WebSocket server in OBS.
 
 ## Troubleshooting
 

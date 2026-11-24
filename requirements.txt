@@ -10,6 +10,7 @@ pywebview>=5.0           # renders the dashboard in a native window (WebView2 on
 pythonnet>=3.0; sys_platform == "win32"   # pywebview's EdgeChromium backend on Windows
 pystray>=0.19            # tray icon; window closes to tray so clipping continues
 Pillow>=10.0
+PyAudioWPatch==0.2.12.9; sys_platform == "win32"  # optional speaker loopback at runtime
 
 # ── YouTube upload (optional — only needed if you enable the YouTube target) ──
 # google-api-python-client>=2.0

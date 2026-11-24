@@ -14,10 +14,12 @@ class FakeRecorder:
     """Stand-in recorder that 'saves' by writing a tiny file."""
     def __init__(self):
         self.calls = 0
+        self.ranges = None
     def start(self): pass
     def stop(self): pass
-    def save(self, seconds, out_path: Path):
+    def save(self, seconds, out_path: Path, ranges=None):
         self.calls += 1
+        self.ranges = ranges
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(b"x" * 1024)
         return out_path
@@ -94,6 +96,9 @@ def test_streak_saves_and_catalogs(cfg):
     time.sleep(0.4)                        # let the debounce fire
 
     assert eng.recorder.calls == 1
+    assert len(eng.recorder.ranges) == 1
+    start, stop = eng.recorder.ranges[0]
+    assert 3 <= stop - start < 4
     clips = eng.catalog.list()
     assert len(clips) == 1
     assert clips[0].kills == 2

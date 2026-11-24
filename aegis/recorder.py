@@ -34,6 +34,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 from . import media, paths
+from .audio import SpeakerBuffer
 from .config import Config
 from .log import log
 
@@ -50,6 +51,9 @@ PRESETS: dict[str, tuple] = {
 # Encoder preference order; first one ffmpeg reports as available wins.
 _HW_ENCODERS = ["h264_nvenc", "h264_amf", "h264_qsv"]
 _D3D11_ENCODERS = {"h264_nvenc", "h264_amf"}
+HIGHLIGHT_HISTORY = 120
+HIGHLIGHT_LEAD = 2.0
+HIGHLIGHT_TAIL = 1.0
 
 
 # ───────── pure helpers (unit-testable) ─────────
@@ -201,6 +205,33 @@ def pick_segments(entries: list[tuple[Path, float]], clip_seconds: float,
     return [p for p, _ in chosen]
 
 
+def highlight_ranges(kills: list[float]) -> list[tuple[float, float]]:
+    ranges: list[tuple[float, float]] = []
+    for kill in kills:
+        start, end = kill - HIGHLIGHT_LEAD, kill + HIGHLIGHT_TAIL
+        if ranges and start <= ranges[-1][1]:
+            ranges[-1] = (ranges[-1][0], end)
+        else:
+            ranges.append((start, end))
+    return ranges
+
+
+def highlight_segments(entries: list[tuple[Path, float]], ranges: list[tuple[float, float]],
+                       segment_time: float) -> list[Path]:
+    complete = sorted(entries, key=lambda entry: entry[1])[:-1]
+    if not complete or not ranges or complete[-1][1] < ranges[-1][1] - 0.25:
+        return []
+    last_kill = ranges[-1][1] - HIGHLIGHT_TAIL
+    if last_kill < complete[0][1] - segment_time:
+        return []
+    # Segment timestamps come from file writes. Ignore a tiny boundary overlap
+    # so timestamp jitter does not append a whole extra segment to each cut.
+    tolerance = 0.15
+    return [segment for segment, end in complete
+            if any(start + tolerance < end and stop - tolerance > end - segment_time
+                   for start, stop in ranges)]
+
+
 # ───────── interface ─────────
 class Recorder(ABC):
     @abstractmethod
@@ -208,7 +239,8 @@ class Recorder(ABC):
     @abstractmethod
     def stop(self) -> None: ...
     @abstractmethod
-    def save(self, seconds: float, out_path: Path) -> Path | None: ...
+    def save(self, seconds: float, out_path: Path,
+             ranges: list[tuple[float, float]] | None = None) -> Path | None: ...
     @abstractmethod
     def status(self) -> dict: ...
 
@@ -236,6 +268,7 @@ class BuiltinRecorder(Recorder):
         self._stderr = None
         self._last_segment_at = 0.0
         self._last_segment_write = 0
+        self._speaker: SpeakerBuffer | None = None
         # Each recorder instance gets its OWN buffer dir. If a config change spins
         # up a new recorder, its ffmpeg can't collide with a lingering old one's
         # segment files, and an in-flight save() reads from a stable directory.
@@ -368,6 +401,7 @@ class BuiltinRecorder(Recorder):
         w, h, fps, bitrate = capture_options(self.cfg, encoder)
         performance = bool(self.cfg.get("recording.prioritize_game_fps", True))
         buffer_secs = max(int(self.cfg.get("recording.buffer_seconds", 45)),
+                          HIGHLIGHT_HISTORY,
                           math.ceil(float(self.cfg.get("recording.clip_seconds", 30))),
                           math.ceil(float(self.cfg.get("engine.debounce_sec", 7))) + 2 * seg_time)
         wrap = max(4, math.ceil(buffer_secs / seg_time) + 2)
@@ -397,15 +431,23 @@ class BuiltinRecorder(Recorder):
 
         from . import winjob
         winjob.guard(proc)
+        speaker = None
+        if self.cfg.get("recording.speaker_audio") and not self._stop.is_set():
+            candidate = SpeakerBuffer(buffer_secs + 2 * seg_time)
+            if candidate.start():
+                speaker = candidate
         with self._lock:
             stopped = self._stop.is_set()
             if not stopped:
                 self._last_segment_at = time.monotonic()
                 self._stderr = stderr
                 self._proc = proc
+                self._speaker = speaker
         if stopped:
             self._terminate(proc)
             stderr.close()
+            if speaker:
+                speaker.stop()
 
     def _capture_failed(self, reason: str) -> None:
         with self._lock:
@@ -424,6 +466,9 @@ class BuiltinRecorder(Recorder):
             p = self._proc
             self._proc = None
             err, self._stderr = self._stderr, None
+            speaker, self._speaker = self._speaker, None
+        if speaker:
+            speaker.stop()
         if p:
             self._terminate(p)
         if err:
@@ -443,26 +488,30 @@ class BuiltinRecorder(Recorder):
                 pass
 
     # -- save --
-    def save(self, seconds: float, out_path: Path) -> Path | None:
+    def save(self, seconds: float, out_path: Path,
+             ranges: list[tuple[float, float]] | None = None) -> Path | None:
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
             return None
         with self._lock:                       # snapshot to avoid a torn read mid-restart
             proc = self._proc
+            speaker = self._speaker
         if proc is None or proc.poll() is not None:
             log("Built-in recorder isn't capturing (game not running?) — no clip")
             return None
 
-        seg_time = int(self.cfg.get("recording.segment_time", 2))
+        seg_time = max(1, int(self.cfg.get("recording.segment_time", 2)))
         bdir = self._bdir
         # Debounce has already allowed post-roll. Wait for the current segment
         # only while the buffer is warming up.
         if len(list(bdir.glob("seg_*.ts"))) < 2:
             self._stop.wait(min(seg_time, 2))
-        entries = self._segment_entries()
+        offset = time.time() - time.monotonic()
+        entries = [(path, ns / 1e9 - offset) for path, ns in self._segment_entries()]
         if len(entries) < 2:
             return None
-        segs = pick_segments(entries, seconds, seg_time)
+        segs = (pick_segments(entries, seconds, seg_time) if ranges is None
+                else highlight_segments(entries, ranges, seg_time))
         if not segs:
             log("Built-in recorder: no buffer segments to assemble")
             return None
@@ -479,10 +528,21 @@ class BuiltinRecorder(Recorder):
                 listfile = temp / "concat.txt"
                 listfile.write_text("".join(f"file '{name}'\n" for name in names), encoding="utf-8")
                 cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                       "-f", "concat", "-safe", "1", "-i", str(listfile),
-                       "-c", "copy", "-movflags", "+faststart", str(out_path)]
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=20,
-                                   creationflags=_NO_WINDOW)
+                       "-f", "concat", "-safe", "1", "-i", str(listfile)]
+                output = ["-movflags", "+faststart", str(out_path)]
+                if speaker:
+                    ends = dict(entries)
+                    spans = [(ends[segment] - seg_time, ends[segment]) for segment in segs]
+                    try:
+                        wav = temp / "speaker.wav"
+                        speaker.write(spans, wav)
+                        r = media.mux_speaker_audio(cmd, wav, output)
+                        if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
+                            return out_path
+                        log(f"Speaker audio mux failed: {r.stderr[-200:]}")
+                    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                        log(f"Could not include speaker audio: {exc}")
+                r = media._run([*cmd, "-c", "copy", *output], timeout=20)
         except Exception as e:
             log(f"Built-in recorder concat failed: {e}")
             out_path.unlink(missing_ok=True)
@@ -496,9 +556,13 @@ class BuiltinRecorder(Recorder):
     def status(self) -> dict:
         with self._lock:
             proc = self._proc
+            speaker = self._speaker
         ready = self._stage == "ready" and proc is not None and proc.poll() is None
+        audio = "off"
+        if self.cfg.get("recording.speaker_audio"):
+            audio = "capturing" if speaker else "unavailable" if ready else "waiting"
         return {"backend": "builtin", "capturing": ready, "encoder": self._encoder, "fps": self._fps,
-                "method": self._method, "state": self._stage, "detail": self._detail}
+                "method": self._method, "state": self._stage, "detail": self._detail, "audio": audio}
 
 
 # ───────── OBS backend (optional) ─────────
@@ -515,11 +579,20 @@ class ObsRecorder(Recorder):
     def stop(self) -> None:
         pass
 
-    def save(self, seconds: float, out_path: Path) -> Path | None:
+    def save(self, seconds: float, out_path: Path,
+             ranges: list[tuple[float, float]] | None = None) -> Path | None:
         replay_dir = Path(self.cfg.get("obs.replay_dir") or (Path.home() / "Videos"))
+        replay_end = time.monotonic()
         if not self.obs.save_replay_buffer():
             return None
-        return _wait_for_new_clip(replay_dir, float(self.cfg.get("engine.clip_wait_sec", 8)))
+        source = _wait_for_new_clip(replay_dir, float(self.cfg.get("engine.clip_wait_sec", 8)))
+        if not source or ranges is None:
+            return source
+        ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
+        if not ffmpeg:
+            log("FFmpeg is required to trim OBS highlights. Keeping the original replay.")
+            return source
+        return media.trim_replay(ffmpeg, source, out_path, replay_end, ranges, self.cfg) or source
 
     def status(self) -> dict:
         return {"backend": "obs", "capturing": self.obs.replay_buffer_active(),

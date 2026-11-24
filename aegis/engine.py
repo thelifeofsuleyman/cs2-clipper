@@ -3,10 +3,10 @@
 This is the heart carried over from the original clipper, now wired to the
 config/catalog/uploader subsystems. Flow per streak:
 
-  GSI ticks -> handle_payload() updates kill state under a lock
+  GSI ticks -> handle_payload() records kill times under a lock
             -> schedule_save() (re)arms a debounce Timer on every new kill
             -> save_clip() fires when the timer expires:
-                 OBS.save_replay_buffer() -> wait_for_new_clip()
+                 save the footage around each kill
                  -> catalog a Clip (thumbnail, size, duration)
                  -> fan out to every enabled uploader
 
@@ -28,7 +28,7 @@ from . import media, paths, polish, uploaders
 from .clips import Catalog, Clip
 from .config import Config
 from .log import log
-from .recorder import make_recorder
+from .recorder import HIGHLIGHT_HISTORY, highlight_ranges, make_recorder
 
 KILL_LABELS = {1: "Kill", 2: "Double tap", 3: "TRIPLE", 4: "QUAD", 5: "ACE"}
 
@@ -38,7 +38,7 @@ def kill_basename(map_name: str, kills: int) -> str:
     so clips are identifiable on disk by map + kill count."""
     m = re.sub(r"^(de|cs|ar|dz|gd)_", "", (map_name or "clip").lower())
     m = re.sub(r"[^a-z0-9]+", "", m) or "clip"
-    label = "ACE" if kills >= 5 else f"{kills}K"
+    label = "ACE" if kills == 5 else f"{kills}K"
     return f"{m}_{label}"
 
 
@@ -67,6 +67,7 @@ class Engine:
         self._save_successes = 0
         self._last_save_ms: int | None = None
         self._last_kill_at: float | None = None
+        self._kill_events: list[tuple[float, int]] = []
         self._last_player = ""
         self._last_map = ""
         self._state = {
@@ -120,6 +121,8 @@ class Engine:
                 if self._timer:
                     self._timer.cancel()
                 self._timer_token = None
+                self._last_kill_at = None
+                self._kill_events.clear()
                 self._state.update(last_match_kills=current_kills, pending_kills=0)
                 return
 
@@ -133,8 +136,10 @@ class Engine:
                 if self._state["pending_kills"]:
                     log("Previous streak aged out of the replay buffer")
                     self._state["pending_kills"] = 0
+                    self._kill_events.clear()
                     self._match_generation += 1
             self._last_kill_at = now
+            self._kill_events.append((now, diff))
             self._state["pending_kills"] += diff
             self._state.update(map_name=self._last_map or "unknown", round_n=round_n, side=team,
                                steam_name=steam_name, steam_id=steam_id)
@@ -194,12 +199,13 @@ class Engine:
             return {"attempts": self._save_attempts, "saved": self._save_successes,
                     "last_save_ms": self._last_save_ms}
 
-    def _record_replay(self, seconds: float, destination: Path) -> Path | None:
+    def _record_replay(self, seconds: float, destination: Path,
+                       ranges: list[tuple[float, float]] | None = None) -> Path | None:
         saved = None
         with self._rec_lock:
             started = time.monotonic()
             try:
-                saved = self.recorder.save(seconds, destination)
+                saved = self.recorder.save(seconds, destination, ranges)
                 return saved
             finally:
                 elapsed_ms = round((time.monotonic() - started) * 1000)
@@ -225,6 +231,7 @@ class Engine:
             generation = self._match_generation
             last_kill = self._last_kill_at
             kills = self._state["pending_kills"]
+            events = self._kill_events[:]
             map_name = self._state["map_name"]
             round_n = self._state["round_n"]
             side = self._state["side"]
@@ -232,20 +239,26 @@ class Engine:
             steam_id = self._state["steam_id"]
 
         if kills < int(self.cfg.get("engine.min_kills")):
-            self._consume_pending(kills, generation)
+            self._consume_pending(kills, generation, len(events))
             return
 
         clip_seconds = self._replay_window()
         expires_at = (last_kill if last_kill is not None else time.monotonic()) + clip_seconds
         if time.monotonic() >= expires_at:
             log("Streak aged out of the replay buffer before it could be saved")
-            self._consume_pending(kills, generation)
+            self._consume_pending(kills, generation, len(events))
             return
 
-        log(f"Saving clip for {kills} kill(s)")
+        oldest = time.monotonic() - clip_seconds
+        retained = [(stamp, count) for stamp, count in events if stamp >= oldest]
+        recent_kills = sum(count for _, count in retained)
+        if recent_kills < int(self.cfg.get("engine.min_kills")):
+            self._consume_pending(kills, generation, len(events))
+            return
+        log(f"Saving highlight for {recent_kills} kill(s)")
         raw_tmp = paths.clips_dir() / f".raw_{uuid.uuid4().hex[:8]}.mp4"
         try:
-            clip_path = self._record_replay(clip_seconds, raw_tmp)
+            clip_path = self._record_replay(clip_seconds, raw_tmp, highlight_ranges([stamp for stamp, _ in retained]))
         except Exception as e:
             log(f"Replay save failed: {e}")
             clip_path = None
@@ -257,14 +270,15 @@ class Engine:
                     log("Recorder produced no clip. Retrying while the streak is in the buffer.")
             return
 
-        self._consume_pending(kills, generation)
-        return clip_path, kills, map_name, round_n, side, steam_name, steam_id
+        self._consume_pending(kills, generation, len(events))
+        return clip_path, recent_kills, map_name, round_n, side, steam_name, steam_id
 
     def _replay_window(self) -> float:
         requested = float(self.cfg.get("recording.clip_seconds", 30))
         debounce = float(self.cfg.get("engine.debounce_sec"))
         segment = max(1, int(self.cfg.get("recording.segment_time", 2)))
-        return max(requested, debounce + 2 * segment)
+        history = HIGHLIGHT_HISTORY if self.cfg.get("recording.backend") == "builtin" else 0
+        return max(requested, history, debounce + 2 * segment)
 
     def _publish_clip(self, clip_path: Path, kills: int, map_name: str, round_n: int,
                       side: str, steam_name: str, steam_id: str) -> None:
@@ -310,9 +324,10 @@ class Engine:
             log(f"Could not rename clip to {dest.name}: {e}")
             return src
 
-    def _consume_pending(self, kills: int, generation: int) -> None:
+    def _consume_pending(self, kills: int, generation: int, event_count: int) -> None:
         with self._lock:
             if generation == self._match_generation:
+                del self._kill_events[:event_count]
                 self._state["pending_kills"] = max(0, self._state["pending_kills"] - kills)
 
     def _catalog_clip(self, path: Path, kills, map_name, round_n, side) -> Clip:
