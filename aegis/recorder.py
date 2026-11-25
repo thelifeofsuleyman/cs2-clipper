@@ -34,7 +34,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 from . import media, paths
-from .audio import SpeakerBuffer
+from .audio import ProcessAudioBuffer, SpeakerBuffer
 from .config import Config
 from .log import log
 
@@ -246,6 +246,8 @@ def highlight_segments(entries: list[tuple[Path, float]], ranges: list[tuple[flo
 
 # ───────── interface ─────────
 class Recorder(ABC):
+    last_saved_spans: tuple[tuple[float, float], ...] = ()
+
     @abstractmethod
     def start(self) -> None: ...
     @abstractmethod
@@ -273,7 +275,7 @@ class BuiltinRecorder(Recorder):
         self._snapshot_lock = threading.Lock()
         self._buffer_generation = 0
         self._retained_until = 0.0
-        self._retained_speaker: SpeakerBuffer | None = None
+        self._retained_speaker: SpeakerBuffer | ProcessAudioBuffer | None = None
         self._supervisor: threading.Thread | None = None
         self._stop = threading.Event()
         self._encoder = "?"
@@ -281,10 +283,11 @@ class BuiltinRecorder(Recorder):
         self._method = ""
         self._stage = "idle"
         self._detail = ""
+        self._save_error = ""
         self._stderr = None
         self._last_segment_at = 0.0
         self._last_segment_write = 0
-        self._speaker: SpeakerBuffer | None = None
+        self._speaker: SpeakerBuffer | ProcessAudioBuffer | None = None
         # Each recorder instance gets its OWN buffer dir. If a config change spins
         # up a new recorder, its ffmpeg can't collide with a lingering old one's
         # segment files, and an in-flight save() reads from a stable directory.
@@ -322,13 +325,25 @@ class BuiltinRecorder(Recorder):
         the thread silently."""
         gate = bool(self.cfg.get("recording.only_when_game_running", True))
         game = self.cfg.get("recording.game_process", "cs2.exe")
+        game_audio = self.cfg.audio_source() == "cs2"
         segment_time = max(1, int(self.cfg.get("recording.segment_time", 2)))
         choices: list[tuple[str, str]] = []
         next_choice = 0
         while not self._stop.is_set():
             try:
+                pid = None
                 try:
-                    want = (not gate) or _process_running(game)
+                    if game_audio and sys.platform == "win32":
+                        from .winprocess import process_id
+                        try:
+                            pid = process_id("cs2.exe")
+                        except OSError:
+                            if gate and game.casefold() == "cs2.exe":
+                                raise
+                    want = (not gate) or (
+                        pid is not None if game_audio and game.casefold() == "cs2.exe"
+                        else _process_running(game)
+                    )
                 except OSError as e:
                     if self._stage != "error":
                         log(f"Stopped capture because CS2 could not be detected: {e}")
@@ -367,6 +382,11 @@ class BuiltinRecorder(Recorder):
                         method, encoder = choices[next_choice]
                         next_choice += 1
                         self._spawn(ffmpeg, method, encoder, segment_time)
+                    if game_audio:
+                        with self._lock:
+                            speaker = self._speaker
+                        if isinstance(speaker, ProcessAudioBuffer):
+                            speaker.refresh(pid)
             except Exception as e:
                 self._stage = "error"
                 self._detail = str(e)
@@ -459,10 +479,14 @@ class BuiltinRecorder(Recorder):
         from . import winjob
         winjob.guard(proc)
         speaker = None
-        if self.cfg.get("recording.speaker_audio") and not self._stop.is_set():
-            candidate = SpeakerBuffer(buffer_secs + 2 * seg_time)
-            if candidate.start():
-                speaker = candidate
+        if not self._stop.is_set():
+            source = self.cfg.audio_source()
+            if source == "desktop":
+                candidate = SpeakerBuffer(buffer_secs + 2 * seg_time)
+                if candidate.start():
+                    speaker = candidate
+            elif source == "cs2":
+                speaker = ProcessAudioBuffer(buffer_secs + 2 * seg_time)
         with self._lock:
             stopped = self._stop.is_set()
             if not stopped:
@@ -527,8 +551,11 @@ class BuiltinRecorder(Recorder):
     # -- save --
     def save(self, seconds: float, out_path: Path,
              ranges: list[tuple[float, float]] | None = None) -> Path | None:
+        self._save_error = ""
+        self.last_saved_spans = ()
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
+            self._save_error = "FFmpeg is unavailable."
             return None
         with self._lock:
             proc = self._proc
@@ -576,6 +603,7 @@ class BuiltinRecorder(Recorder):
                         speaker = self._speaker if live else self._retained_speaker
                     entries = [(path, ns / 1e9 - offset) for path, ns in self._segment_entries()]
                     if len(entries) < 2:
+                        self._save_error = "The replay buffer is still warming up."
                         return None
                     segs = (pick_segments(entries, seconds, seg_time) if ranges is None
                             else highlight_segments(entries, ranges, seg_time))
@@ -590,14 +618,15 @@ class BuiltinRecorder(Recorder):
                 cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                        "-f", "concat", "-safe", "1", "-i", str(listfile)]
                 output = ["-movflags", "+faststart", str(out_path)]
-                if speaker:
-                    ends = dict(entries)
-                    spans = [(ends[segment] - seg_time, ends[segment]) for segment in segs]
+                ends = dict(entries)
+                spans = [(ends[segment] - seg_time, ends[segment]) for segment in segs]
+                if speaker and (not isinstance(speaker, ProcessAudioBuffer) or speaker.buffered.is_set()):
                     try:
                         wav = temp / "speaker.wav"
                         speaker.write(spans, wav)
                         r = media.mux_speaker_audio(cmd, wav, output)
                         if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
+                            self.last_saved_spans = tuple(spans)
                             return out_path
                         log(f"Speaker audio mux failed: {r.stderr[-200:]}")
                     except (OSError, ValueError, subprocess.SubprocessError) as exc:
@@ -605,11 +634,17 @@ class BuiltinRecorder(Recorder):
                 r = media._run([*cmd, "-c", "copy", *output], timeout=20)
         except Exception as e:
             log(f"Built-in recorder concat failed: {e}")
+            if isinstance(e, OSError):
+                self._save_error = ("The save drive or replay buffer drive is full." if paths.disk_full(e)
+                                    else "Aegis could not read the buffer or write to the clip folder.")
             out_path.unlink(missing_ok=True)
             return None
         if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
+            self.last_saved_spans = tuple(spans)
             return out_path
         log(f"Built-in recorder save failed: {(r.stderr or '')[-200:]}")
+        if "no space left" in (r.stderr or "").lower() or "disk full" in (r.stderr or "").lower():
+            self._save_error = "The save drive is full."
         out_path.unlink(missing_ok=True)
         return None
 
@@ -619,12 +654,20 @@ class BuiltinRecorder(Recorder):
             speaker = self._speaker
             retained = max(0, math.ceil(self._retained_until - time.monotonic()))
         ready = self._stage == "ready" and proc is not None and proc.poll() is None
-        audio = "off"
-        if self.cfg.get("recording.speaker_audio"):
+        source = self.cfg.audio_source()
+        audio, audio_detail = "off", ""
+        if source == "desktop":
             audio = "capturing" if speaker else "unavailable" if ready else "waiting"
+        elif source == "cs2":
+            audio = "waiting"
+            if isinstance(speaker, ProcessAudioBuffer):
+                audio = "capturing" if speaker.ready.is_set() else "unavailable" if ready else "waiting"
+                audio_detail = speaker.detail
         return {"backend": "builtin", "capturing": ready, "encoder": self._encoder, "fps": self._fps,
                 "method": self._method, "state": self._stage, "detail": self._detail, "audio": audio,
-                "replay_available": ready or bool(retained), "replay_expires_in": retained}
+                "audio_source": source, "audio_detail": audio_detail,
+                "replay_available": ready or bool(retained), "replay_expires_in": retained,
+                "save_error": self._save_error}
 
 
 # ───────── OBS backend (optional) ─────────
@@ -632,6 +675,7 @@ class ObsRecorder(Recorder):
     def __init__(self, cfg: Config):
         from .obs_client import ObsClient
         self.cfg = cfg
+        self._save_error = ""
         self.obs = ObsClient(cfg.get("obs.host"), int(cfg.get("obs.port")),
                              cfg.get("obs.password", ""))
 
@@ -643,23 +687,35 @@ class ObsRecorder(Recorder):
 
     def save(self, seconds: float, out_path: Path,
              ranges: list[tuple[float, float]] | None = None) -> Path | None:
+        self.last_saved_spans = ()
+        self._save_error = ""
         replay_dir = Path(self.cfg.get("obs.replay_dir") or (Path.home() / "Videos"))
         replay_end = time.monotonic()
         requested_at = time.time()
         if not self.obs.save_replay_buffer():
+            self._save_error = "Start the Replay Buffer in OBS and check its connection to Aegis."
             return None
         source = _wait_for_new_clip(replay_dir, float(self.cfg.get("engine.clip_wait_sec", 8)), requested_at)
-        if not source or ranges is None:
-            return source
+        if not source:
+            self._save_error = "OBS did not write a replay. Check the OBS replay folder and available space."
+            return None
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
-            log("FFmpeg is required to trim OBS highlights. Keeping the original replay.")
             return source
-        return media.trim_replay(ffmpeg, source, out_path, replay_end, ranges, self.cfg) or source
+        if ranges is not None:
+            timeline = []
+            trimmed = media.trim_replay(ffmpeg, source, out_path, replay_end, ranges, self.cfg, timeline)
+            if trimmed:
+                self.last_saved_spans = tuple(timeline)
+                return trimmed
+        duration = media.probe_duration(ffmpeg, source)
+        if duration > 0:
+            self.last_saved_spans = ((replay_end - duration, replay_end),)
+        return source
 
     def status(self) -> dict:
         return {"backend": "obs", "capturing": self.obs.replay_buffer_active(),
-                "encoder": "obs", "obs_connected": self.obs.connected()}
+                "encoder": "obs", "obs_connected": self.obs.connected(), "save_error": self._save_error}
 
 
 # ───────── shared utilities ─────────

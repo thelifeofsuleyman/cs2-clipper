@@ -8,8 +8,14 @@ Set ``AEGIS_DATA_DIR`` to override (handy for dev — keep state inside the repo
 """
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
+
+
+def disk_full(error: OSError) -> bool:
+    return (error.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC))
+            or getattr(error, "winerror", None) in (39, 112))
 
 
 def atomic_write_text(path: Path, text: str) -> None:

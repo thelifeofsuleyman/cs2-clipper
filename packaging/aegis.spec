@@ -38,7 +38,7 @@ vendor = os.path.join(ROOT, "packaging", "vendor")
 license_file = os.path.join(vendor, "ffmpeg-LICENSE.txt")
 if os.path.exists(license_file):
     datas.append((license_file, "."))
-for exe in ("ffmpeg.exe", "ffprobe.exe"):
+for exe in ("ffmpeg.exe", "ffprobe.exe", "aegis-process-audio.exe"):
     p = os.path.join(vendor, exe)
     if os.path.exists(p):
         binaries.append((p, "."))

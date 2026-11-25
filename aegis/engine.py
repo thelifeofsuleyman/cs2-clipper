@@ -30,6 +30,7 @@ from .clips import Catalog, Clip
 from .config import Config
 from .log import log
 from .recorder import HIGHLIGHT_HISTORY, highlight_ranges, make_recorder
+from .storage import StorageStatus
 
 KILL_LABELS = {1: "Kill", 2: "Double tap", 3: "TRIPLE", 4: "QUAD", 5: "ACE"}
 COMPETITIVE_MODES = {"competitive", "premier", "wingman", "scrimcomp2v2"}
@@ -52,12 +53,29 @@ def format_caption(kills: int, map_name: str, round_n: int, side: str) -> str:
     return " ".join(parts)
 
 
+def playback_markers(events: list[tuple[float, int, int]],
+                     spans: tuple[tuple[float, float], ...]) -> list[dict]:
+    markers = []
+    for stamp, count, round_n in events:
+        elapsed = 0.0
+        for start, end in spans:
+            if start <= stamp < end:
+                markers.append({"time": round(elapsed + stamp - start, 3),
+                                "kills": count, "round": round_n})
+                break
+            elapsed += end - start
+    return markers
+
+
 class Engine:
     def __init__(self, cfg: Config, catalog: Catalog):
         self.cfg = cfg
         self.catalog = catalog
         self.recorder = make_recorder(cfg)
         self.replay_hotkey_state = "off"
+        self.replay_receipt = None
+        self.notify_replay = None
+        self._storage_status = StorageStatus()
         self._lock = threading.Lock()
         self._rec_lock = threading.Lock()   # serializes recorder start/stop/restart
         self._save_lock = threading.Lock()
@@ -70,7 +88,12 @@ class Engine:
         self._save_successes = 0
         self._last_save_ms: int | None = None
         self._last_kill_at: float | None = None
-        self._kill_events: list[tuple[float, int]] = []
+        self._kill_events: list[tuple[float, int, int]] = []
+        self._recent_kills: list[tuple[float, int, int]] = []
+        self._match: dict = {}
+        self._match_observed_at = 0.0
+        self._last_round: int | None = None
+        self._last_phase = ""
         self._last_player = ""
         self._last_map = ""
         self._last_mode = ""
@@ -90,6 +113,7 @@ class Engine:
             return
         player = p.get("player") or {}
         map_obj = p.get("map") or {}
+        round_obj = p.get("round") or {}
         provider = p.get("provider") or {}
         if not all(isinstance(obj, dict) for obj in (player, map_obj, provider)):
             return
@@ -107,8 +131,10 @@ class Engine:
             return
         map_name = str(map_obj.get("name") or "")
         mode = str(map_obj.get("mode") or "").strip().lower()
-        round_value = map_obj.get("round", 0)
-        round_n = round_value if type(round_value) is int else 0
+        round_value = map_obj.get("round")
+        round_n = round_value if type(round_value) is int and round_value >= 0 else None
+        round_phase = round_obj.get("phase") if isinstance(round_obj, dict) else None
+        phase = str(map_obj.get("phase") or "").lower()
         team = str(player.get("team") or "?").upper()
         steam_name = player.get("name") or ""
         steam_id = observed or owner
@@ -119,10 +145,37 @@ class Engine:
             prev = self._state["last_match_kills"]
             changed_match = ((map_name and self._last_map and map_name != self._last_map)
                              or (mode and self._last_mode and mode != self._last_mode)
-                             or (steam_id and self._last_player and steam_id != self._last_player))
+                             or (steam_id and self._last_player and steam_id != self._last_player)
+                             or (phase in ("warmup", "live") and self._last_phase in ("gameover", "intermission"))
+                             or (round_n is not None and self._last_round is not None
+                                 and round_n < self._last_round))
+            reset = prev == -1 or current_kills < prev or changed_match
             self._last_map = map_name or self._last_map
             self._last_player = steam_id or self._last_player
-            if prev == -1 or current_kills < prev or changed_match:
+            self._last_mode = mode or self._last_mode
+            if reset or round_n is not None:
+                self._last_round = round_n
+            if reset or phase:
+                self._last_phase = phase
+            display_round = self._state["round_n"] if not reset else 0
+            if self._last_round is not None:
+                if self._last_mode in ("deathmatch", "gungameprogressive") or self._last_phase == "warmup":
+                    display_round = 0
+                elif round_n is not None:
+                    ended = round_phase == "over" or self._last_phase in ("gameover", "intermission")
+                    display_round = max(1, round_n + (0 if ended else 1))
+            self._state.update(last_match_kills=current_kills, map_name=self._last_map or "unknown",
+                               round_n=display_round, side=team, steam_name=steam_name,
+                               steam_id=steam_id)
+            now = time.monotonic()
+            if reset or (not self._match and map_name):
+                self._recent_kills.clear()
+                self._match_observed_at = now
+                self._match = ({"match_id": uuid.uuid4().hex, "match_mode": self._last_mode,
+                                "match_started": time.time()} if self._last_map else {})
+            elif self._match and mode:
+                self._match["match_mode"] = mode
+            if reset:
                 if prev != -1:
                     log(f"New match / reset (kills {prev} -> {current_kills})")
                 self._match_generation += 1
@@ -131,17 +184,18 @@ class Engine:
                 self._timer_token = None
                 self._last_kill_at = None
                 self._kill_events.clear()
-                self._last_mode = mode
-                self._state.update(last_match_kills=current_kills, pending_kills=0)
+                self._state["pending_kills"] = 0
                 return
 
             diff = current_kills - prev
-            self._state["last_match_kills"] = current_kills
-            self._last_mode = mode or self._last_mode
-            if diff <= 0 or not self._mode_allows_highlights(self._last_mode):
+            if diff <= 0:
                 return
-
-            now = time.monotonic()
+            event = (now, diff, self._state["round_n"])
+            history_start = now - self._replay_window()
+            self._recent_kills = [kill for kill in self._recent_kills if kill[0] >= history_start]
+            self._recent_kills.append(event)
+            if not self._mode_allows_highlights(self._last_mode):
+                return
             if self._last_kill_at is not None and now - self._last_kill_at >= self._replay_window():
                 if self._state["pending_kills"]:
                     log("Previous streak aged out of the replay buffer")
@@ -149,10 +203,8 @@ class Engine:
                     self._kill_events.clear()
                     self._match_generation += 1
             self._last_kill_at = now
-            self._kill_events.append((now, diff))
+            self._kill_events.append(event)
             self._state["pending_kills"] += diff
-            self._state.update(map_name=self._last_map or "unknown", round_n=round_n, side=team,
-                               steam_name=steam_name, steam_id=steam_id)
             log(f"Kill +{diff} (pending {self._state['pending_kills']}) "
                 f"on {map_name} round {round_n}")
             self._arm_timer()
@@ -209,6 +261,8 @@ class Engine:
             "pending_kills": pending,
             "automatic_highlights": self._mode_allows_highlights(mode),
             "replay_hotkey": self.replay_hotkey_state,
+            "replay_receipt": self.replay_receipt,
+            "storage": self.storage_status(),
             "gsi_connected": bool(last_gsi and time.monotonic() - last_gsi < 25),
             "enabled_targets": [
                 name for name, _ in uploaders.REGISTRY
@@ -224,14 +278,22 @@ class Engine:
     def clips_dir(self) -> Path:
         return paths.clips_dir(self.cfg.get("storage.clips_dir", ""))
 
+    def storage_status(self) -> dict:
+        folder = self.cfg.get("storage.clips_dir", "")
+        if self.cfg.get("recording.backend") == "obs":
+            buffer = Path(self.cfg.get("obs.replay_dir") or Path.home() / "Videos")
+            return self._storage_status.status(folder or str(buffer), buffer)
+        return self._storage_status.status(folder, self._storage_status.buffer)
+
     def _record_replay(self, seconds: float, destination: Path,
-                       ranges: list[tuple[float, float]] | None = None) -> Path | None:
+                       ranges: list[tuple[float, float]] | None = None
+                       ) -> tuple[Path | None, tuple[tuple[float, float], ...]]:
         saved = None
         with self._rec_lock:
             started = time.monotonic()
             try:
                 saved = self.recorder.save(seconds, destination, ranges)
-                return saved
+                return saved, tuple(getattr(self.recorder, "last_saved_spans", ())) if saved else ()
             finally:
                 elapsed_ms = round((time.monotonic() - started) * 1000)
                 with self._lock:
@@ -257,9 +319,10 @@ class Engine:
             last_kill = self._last_kill_at
             kills = self._state["pending_kills"]
             events = self._kill_events[:]
+            match = self._match.copy()
             mode = self._last_mode
             map_name = self._state["map_name"]
-            round_n = self._state["round_n"]
+            round_n = events[-1][2] if events else self._state["round_n"]
             side = self._state["side"]
             steam_name = self._state["steam_name"]
             steam_id = self._state["steam_id"]
@@ -276,15 +339,16 @@ class Engine:
             return
 
         oldest = time.monotonic() - clip_seconds
-        retained = [(stamp, count) for stamp, count in events if stamp >= oldest]
-        recent_kills = sum(count for _, count in retained)
+        retained = [event for event in events if event[0] >= oldest]
+        recent_kills = sum(count for _, count, _ in retained)
         if recent_kills < int(self.cfg.get("engine.min_kills")):
             self._consume_pending(kills, generation, len(events))
             return
         log(f"Saving highlight for {recent_kills} kill(s)")
         try:
             raw_tmp = self.clips_dir() / f".raw_{uuid.uuid4().hex[:8]}.mp4"
-            clip_path = self._record_replay(clip_seconds, raw_tmp, highlight_ranges([stamp for stamp, _ in retained]))
+            clip_path, spans = self._record_replay(clip_seconds, raw_tmp,
+                                                   highlight_ranges([stamp for stamp, _, _ in retained]))
         except Exception as e:
             log(f"Replay save failed: {e}")
             clip_path = None
@@ -297,7 +361,8 @@ class Engine:
             return
 
         self._consume_pending(kills, generation, len(events))
-        return clip_path, recent_kills, map_name, round_n, side, steam_name, steam_id
+        match["kill_markers"] = playback_markers(retained, spans)
+        return clip_path, recent_kills, map_name, round_n, side, steam_name, steam_id, match
 
     def _replay_window(self) -> float:
         requested = float(self.cfg.get("recording.clip_seconds", 30))
@@ -307,7 +372,7 @@ class Engine:
         return max(requested, history, debounce + 2 * segment)
 
     def _publish_clip(self, clip_path: Path, kills: int, map_name: str, round_n: int,
-                      side: str, steam_name: str, steam_id: str) -> None:
+                      side: str, steam_name: str, steam_id: str, metadata: dict) -> None:
         # Produce a share-ready version (intro card + fades); fall back to raw.
         produced = clip_path
         try:
@@ -329,7 +394,7 @@ class Engine:
         # Give it a human filename: <map>_<kills>  e.g. mirage_4K, inferno_ACE
         with self._file_lock:
             final = self._finalize_clip(produced, map_name, kills)
-        clip = self._catalog_clip(final, kills, map_name, round_n, side)
+        clip = self._catalog_clip(final, kills, map_name, round_n, side, metadata=metadata)
         caption = format_caption(kills, map_name, round_n, side)
         self.fan_out(clip, caption, automatic=True)
 
@@ -347,7 +412,7 @@ class Engine:
             shutil.move(str(src), str(dest))     # handles cross-volume (OBS dir)
             return dest
         except Exception as e:
-            log(f"Could not rename clip to {dest.name}: {e}")
+            log(f"Could not finalize clip {src.name}: {e}")
             return src
 
     def _consume_pending(self, kills: int, generation: int, event_count: int) -> None:
@@ -356,7 +421,8 @@ class Engine:
                 del self._kill_events[:event_count]
                 self._state["pending_kills"] = max(0, self._state["pending_kills"] - kills)
 
-    def _catalog_clip(self, path: Path, kills, map_name, round_n, side, *, title=None, tags=None) -> Clip:
+    def _catalog_clip(self, path: Path, kills, map_name, round_n, side, *, title=None, tags=None,
+                      metadata=None) -> Clip:
         cid = f"{int(path.stat().st_mtime)}_{uuid.uuid4().hex[:6]}"
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         thumb = media.make_thumbnail(ffmpeg, path, cid)
@@ -373,6 +439,7 @@ class Engine:
             size_mb=round(path.stat().st_size / (1024 * 1024), 1),
             duration=round(media.probe_duration(ffmpeg, path), 1) if ffmpeg else 0.0,
             thumb=thumb.name if thumb else "",
+            **(metadata or {}),
         )
         try:
             self.catalog.add(clip)
@@ -404,7 +471,13 @@ class Engine:
         try:
             title = (original.title.strip() or "Clip")[:230] + " (trim)"
             tags = list(dict.fromkeys([*original.tags, "trimmed"]))
-            return self._catalog_clip(destination, 0, original.map_name, 0, "?", title=title, tags=tags)
+            markers = [dict(marker, time=round(marker["time"] - start, 3))
+                       for marker in original.kill_markers if start <= marker["time"] < min(end, duration)]
+            metadata = {"match_id": original.match_id, "match_mode": original.match_mode,
+                        "match_started": original.match_started, "kill_markers": markers}
+            round_n = markers[-1]["round"] if markers else original.round_n if original.match_id else 0
+            return self._catalog_clip(destination, sum(m["kills"] for m in markers), original.map_name,
+                                      round_n, original.side, title=title, tags=tags, metadata=metadata)
         except Exception:
             destination.unlink(missing_ok=True)
             raise
@@ -454,10 +527,32 @@ class Engine:
         return {"ok": True, "clip_id": clip.id}
 
     def save_replay(self) -> dict:
-        out = self.clips_dir() / f"replay_{uuid.uuid4().hex[:10]}.mp4"
-        captured = self._record_replay(float(self.cfg.get("recording.clip_seconds", 30)), out)
+        with self._lock:
+            match = self._match.copy()
+            match_observed_at = self._match_observed_at
+            last_gsi = self._last_gsi
+            events = self._recent_kills[:]
+            map_name = self._state["map_name"]
+            round_n = self._state["round_n"]
+            side = self._state["side"]
+        try:
+            out = self.clips_dir() / f"replay_{uuid.uuid4().hex[:10]}.mp4"
+            captured, spans = self._record_replay(float(self.cfg.get("recording.clip_seconds", 30)), out)
+        except OSError as exc:
+            log(f"Replay could not be written: {exc}")
+            detail = "The save drive is full." if paths.disk_full(exc) else "The clip folder is unavailable or unwritable."
+            return {"ok": False, "detail": detail}
+        except ValueError:
+            return {"ok": False, "detail": "The clip folder path is invalid."}
         if not captured:
-            return {"ok": False, "detail": "Replay buffer is unavailable. Check capture status and Activity."}
+            status = self.recorder.status()
+            detail = status.get("save_error") or {
+                "starting": "The replay buffer is still warming up.",
+                "waiting_game": "Open CS2 and wait for the replay buffer.",
+                "error": "Recording stopped. Open Activity for details.",
+            }.get(status.get("state"), "The replay buffer is unavailable. Check capture status and Activity.")
+            return {"ok": False, "detail": detail}
+        warning = ""
         if self.cfg.get("storage.clips_dir") and captured.parent != out.parent:
             destination = out.with_suffix(captured.suffix)
             try:
@@ -465,9 +560,41 @@ class Engine:
                 captured = destination
             except OSError as exc:
                 log(f"Could not move the OBS replay to the clip folder: {exc}")
-        clip = self._catalog_clip(captured, 0, "Manual replay", 0, "?")
-        self.catalog.update(clip.id, title="Manual replay")
-        return {"ok": True, "clip_id": clip.id}
+                try:
+                    destination.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    log(f"Could not remove the partial replay copy: {cleanup_error}")
+                problem = "The save drive was full." if paths.disk_full(exc) else "The clip folder was unavailable."
+                warning = f"{problem} OBS kept the file in its replay folder."
+        try:
+            markers = playback_markers(events, spans)
+            if not match or not any(end >= match_observed_at and start <= last_gsi + 25 for start, end in spans):
+                match, map_name, round_n, side = {}, "Manual replay", 0, "?"
+            match["kill_markers"] = markers
+            clip = self._catalog_clip(captured, sum(m["kills"] for m in markers), map_name,
+                                      markers[-1]["round"] if markers else round_n, side,
+                                      title="Manual replay", metadata=match)
+        except OSError as exc:
+            log(f"Replay file saved, but could not write the library: {exc}")
+            detail = "The replay file was saved, but the library could not be updated."
+            return {"ok": False, "detail": detail}
+        return {"ok": True, "clip_id": clip.id, "warning": warning}
+
+    def save_shortcut_replay(self) -> None:
+        try:
+            result = self.save_replay()
+        except Exception as exc:
+            log(f"Replay shortcut failed: {exc}")
+            result = {"ok": False, "detail": "Could not save the replay. Check Activity."}
+        text = (result.get("warning") or "Replay saved to your library.") if result["ok"] else result["detail"]
+        self.replay_receipt = {"id": uuid.uuid4().hex, "ok": result["ok"], "message": text}
+        log(f"Replay shortcut: {text}")
+        notify = self.notify_replay
+        if notify is not None:
+            try:
+                notify(text)
+            except Exception as exc:
+                log(f"Could not show the replay notification: {exc}")
 
     def trigger_capture_test(self, seconds: int = 5) -> dict:
         """Record a few seconds of the REAL screen — proves ddagrab capture + the

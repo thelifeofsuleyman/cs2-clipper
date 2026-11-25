@@ -113,7 +113,8 @@ def quality_encode_args(ffmpeg: str, cfg) -> list[str]:
 
 
 def trim_replay(ffmpeg: str, source: Path, destination: Path, replay_end: float,
-                ranges: list[tuple[float, float]], cfg) -> Path | None:
+                ranges: list[tuple[float, float]], cfg,
+                timeline: list[tuple[float, float]] | None = None) -> Path | None:
     duration, audio_tracks = _stream_details(ffmpeg, source)
     replay_start = replay_end - duration
     edits = [(max(0.0, start - replay_start), min(duration, stop - replay_start))
@@ -143,6 +144,8 @@ def trim_replay(ffmpeg: str, source: Path, destination: Path, replay_end: float,
         try:
             result = _run([*cmd, *settings, *end], timeout=90)
             if result.returncode == 0 and destination.exists() and destination.stat().st_size:
+                if timeline is not None:
+                    timeline.extend((replay_start + start, replay_start + stop) for start, stop in edits)
                 return destination
             log(f"OBS highlight trim failed: {result.stderr[-200:]}")
         except (OSError, subprocess.SubprocessError) as exc:

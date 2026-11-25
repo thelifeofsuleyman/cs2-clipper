@@ -5,8 +5,6 @@ import re
 import sys
 import threading
 
-from .log import log
-
 _MODIFIERS = {"ALT": 1, "CTRL": 2, "SHIFT": 4}
 _NO_REPEAT = 0x4000
 _WM_HOTKEY = 0x0312
@@ -44,13 +42,6 @@ class ReplayHotkey:
         if self._listener is not None:
             self._listener.join(timeout=1)
 
-    def _save(self):
-        try:
-            result = self.engine.save_replay()
-            log("Replay shortcut saved a clip" if result["ok"] else result["detail"])
-        except (OSError, ValueError) as exc:
-            log(f"Replay shortcut could not save a clip: {exc}")
-
     def _listen(self):
         import ctypes
         from ctypes import wintypes
@@ -80,7 +71,7 @@ class ReplayHotkey:
                 while user32.PeekMessageW(ctypes.byref(message), None, _WM_HOTKEY, _WM_HOTKEY, 1):
                     if (registered and message.wParam == _REPLAY_ID
                             and (self._saving is None or not self._saving.is_alive())):
-                        self._saving = threading.Thread(target=self._save, daemon=True)
+                        self._saving = threading.Thread(target=self.engine.save_shortcut_replay, daemon=True)
                         self._saving.start()
                 self._stop.wait(0.05 if registered else 0.25)
         finally:

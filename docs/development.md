@@ -20,6 +20,10 @@ Settings live in `%APPDATA%\AegisClipper\config.json` on Windows by default.
 Existing `.env` settings are imported when the app first creates `config.json`.
 Configure new installs through the setup screen.
 
+To test CS2-only audio from source on Windows 11, build the helper with
+`packaging\build-process-audio.cmd`. It uses Visual Studio C++ Build Tools and a
+Windows 11 SDK, and writes the helper to `packaging/vendor/`.
+
 ## Tests
 
 ```powershell
@@ -52,7 +56,8 @@ a release. A pushed `v<version>` tag runs tests and builds the installer and
 portable ZIP in the [release workflow](../.github/workflows/release.yml). Manual
 workflow runs upload build artifacts to GitHub Actions.
 
-For a local build with Inno Setup installed, run this from the repository root.
+For a local build, install Inno Setup and the C++ tools above, then run this
+from the repository root.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Ffmpeg -Installer -Portable

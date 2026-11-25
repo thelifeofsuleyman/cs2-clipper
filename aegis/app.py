@@ -128,7 +128,7 @@ class _WindowApi:
             self.quit()
 
 
-def _run_window(cfg, port: int, landing: str) -> bool:
+def _run_window(cfg, port: int, landing: str, engine) -> bool:
     """Show the dashboard in a TRUE native window via pywebview, with native
     title-bar behavior: minimize -> background (engine keeps running), and the
     native X -> the in-page "background or quit" dialog. Returns False (logging
@@ -149,6 +149,7 @@ def _run_window(cfg, port: int, landing: str) -> bool:
         )
         api._window = window
         tray = _start_tray_for_window(window, cfg, api.quit)
+        end_notices = _tray_notices(tray, engine) if tray else None
 
         # Native X: don't close — show the in-page choice dialog and cancel.
         def _on_closing():
@@ -166,6 +167,7 @@ def _run_window(cfg, port: int, landing: str) -> bool:
             webview.start()  # blocks until the app exits
         finally:
             if tray:
+                end_notices()
                 tray.stop()
         return True
     except Exception as e:
@@ -258,8 +260,45 @@ def _start_tray_for_window(window, cfg, quit_window):
     return icon
 
 
+def _notify_tray(icon, text: str) -> None:
+    if sys.platform != "win32" or not icon.visible:
+        return
+    from pystray._util import win32
+    icon._message(win32.NIM_MODIFY, win32.NIF_INFO, szInfo=text[:255],
+                  szInfoTitle=APP_NAME, dwInfoFlags=0x10)  # NIIF_NOSOUND
+
+
+def _tray_notices(icon, engine):
+    stop = threading.Event()
+    engine.notify_replay = lambda text: _notify_tray(icon, text)
+
+    def monitor():
+        warned = set()
+        while not stop.is_set():
+            try:
+                status = engine.storage_status()
+                if status and icon.visible:
+                    low = {key for key, value in status.items() if value.get("low")}
+                    if low - warned:
+                        drive = ("the clip and replay buffer drives" if len(low) == 2 else
+                                 "the clip drive" if "clips" in low else "the replay buffer drive")
+                        _notify_tray(icon, f"Low space on {drive}. Open Aegis to review large clips.")
+                    warned = low
+            except Exception as exc:
+                log(f"Could not check storage or show its notification: {exc}")
+            stop.wait(15)
+
+    threading.Thread(target=monitor, daemon=True).start()
+
+    def close():
+        engine.notify_replay = None
+        stop.set()
+
+    return close
+
+
 # ───────── UI fallback: tray icon + system browser ─────────
-def _run_tray_browser(cfg, port: int) -> None:
+def _run_tray_browser(cfg, port: int, engine) -> None:
     url = f"http://127.0.0.1:{port}/"
     try:
         import pystray
@@ -277,7 +316,11 @@ def _run_tray_browser(cfg, port: int) -> None:
             pystray.MenuItem("Quit", lambda i, it: i.stop()),
         ),
     )
-    icon.run()
+    end_notices = _tray_notices(icon, engine)
+    try:
+        icon.run()
+    finally:
+        end_notices()
 
 
 def _existing_instance(port: int) -> bool:
@@ -388,11 +431,11 @@ def main(argv: list[str] | None = None) -> int:
     # Prefer a true native window (pywebview). If that can't load, open a
     # chromeless app-mode browser window (still looks like an app); only as a
     # last resort use a normal browser tab. A tray icon runs alongside either way.
-    if not _run_window(cfg, port, landing):
+    if not _run_window(cfg, port, landing, engine):
         url = f"http://127.0.0.1:{port}{landing}"
         if not _open_app_mode(url):
             threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-        _run_tray_browser(cfg, port)
+        _run_tray_browser(cfg, port, engine)
     replay_hotkey.close()
     engine.stop_recording()
     return 0

@@ -34,6 +34,10 @@ class Clip:
     duration: float = 0.0
     thumb: str = ""                       # thumbnail filename under thumbs_dir
     uploads: dict[str, str] = field(default_factory=dict)  # target -> "ok"|"error: .."
+    match_id: str = ""
+    match_mode: str = ""
+    match_started: float = 0.0
+    kill_markers: list[dict] = field(default_factory=list)
 
     def exists(self) -> bool:
         return Path(self.path).exists()

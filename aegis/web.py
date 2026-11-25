@@ -118,7 +118,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         recorder_status = status["recorder"]
         return jsonify(
             version=__version__,
-            capture={key: recorder_status[key] for key in ("backend", "state", "encoder", "method", "fps", "audio")
+            capture={key: recorder_status[key] for key in
+                     ("backend", "state", "encoder", "method", "fps", "audio", "audio_source")
                      if key in recorder_status},
             buffer_ready=status["replay_available"],
             game_updates_connected=status["gsi_connected"],
@@ -306,6 +307,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
             return jsonify(error="Provide settings as a JSON object with settings groups."), 400
         if patch.get("engine", {}).get("highlight_modes", "all") not in ("off", "all", "no_deathmatch", "competitive"):
             return jsonify(error="Choose a supported automatic highlight mode."), 400
+        if patch.get("recording", {}).get("audio_source", "off") not in ("off", "desktop", "cs2"):
+            return jsonify(error="Choose a supported recording audio source."), 400
         if "replay" in patch.get("hotkeys", {}):
             from .hotkeys import parse_hotkey
 
@@ -440,7 +443,7 @@ _UI_SETTINGS = {
     "storage": {"clips_dir"},
     "hotkeys": {"replay"},
     "engine": {"debounce_sec", "min_kills", "highlight_modes", "cs2_cfg_dir"},
-    "recording": {"backend", "preset", "prioritize_game_fps", "speaker_audio", "compact_video",
+    "recording": {"backend", "preset", "prioritize_game_fps", "speaker_audio", "audio_source", "compact_video",
                   "clip_seconds", "only_when_game_running"},
     "polish": {"enabled"},
     "obs": {"replay_dir", "port", "password"},
@@ -479,6 +482,8 @@ def _clip_json(c) -> dict:
         "round": c.round_n, "side": c.side, "tags": c.tags, "favorite": c.favorite,
         "size_mb": c.size_mb, "duration": c.duration, "created": c.created,
         "size_bytes": size, "uploads": c.uploads, "missing": size is None,
+        "match_id": c.match_id, "match_mode": c.match_mode, "match_started": c.match_started,
+        "kill_markers": c.kill_markers,
     }
 
 

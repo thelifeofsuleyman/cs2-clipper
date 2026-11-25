@@ -81,6 +81,8 @@ if ($Ffmpeg) {
 }
 
 # 2b. Generate the app icon and installer artwork.
+& (Join-Path $PSScriptRoot "build-process-audio.cmd")
+if ($LASTEXITCODE -ne 0) { throw "Process audio helper build failed" }
 & $py packaging\make_icon.py
 if ($LASTEXITCODE -ne 0) { throw "Installer artwork generation failed" }
 

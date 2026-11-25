@@ -43,6 +43,10 @@ def _snapshot_api():
 
 def is_running(executable: str) -> bool:
     """Return whether the executable is present, or raise if the check failed."""
+    return process_id(executable) is not None
+
+
+def process_id(executable: str) -> int | None:
     create, first, next_process, close = _snapshot_api()
     snapshot = create(_TH32CS_SNAPPROCESS, 0)
     if snapshot == _INVALID_HANDLE:
@@ -55,11 +59,11 @@ def is_running(executable: str) -> bool:
         found = first(snapshot, ctypes.byref(entry))
         while found:
             if entry.szExeFile.casefold() == name:
-                return True
+                return int(entry.th32ProcessID)
             found = next_process(snapshot, ctypes.byref(entry))
         error = ctypes.get_last_error()
         if error != _ERROR_NO_MORE_FILES:
             raise ctypes.WinError(error)
-        return False
+        return None
     finally:
         close(snapshot)

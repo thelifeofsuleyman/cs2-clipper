@@ -37,13 +37,17 @@ between them. **Save replay** saves a continuous window of the configured length
 Automatic highlights skip Deathmatch by default. Change the mode filter in
 **Settings → Highlights**, or turn them off for manual replays only. Kills by
 the person you are spectating don't trigger a clip. Set a global replay shortcut
-under **Settings → Recording** to save a replay during a match.
+under **Settings → Recording** to save a replay during a match. The tray and
+dashboard confirm the save or show why it failed.
 
 Use **Settings → Storage** to pick the folder for new clips. Sort the library by
-**Largest first** to find clips taking up space.
+**Largest first** to find clips taking up space. Aegis warns when the clip or
+replay buffer drive has less than 2 GiB free. Deleting a clip requires confirmation.
 
-Open a video and choose **Trim clip** to set the start and end, preview the
-selection, and save it as a separate video. The original stays in the library.
+Open a video and click a kill marker to jump to the action. Choose **Trim clip**
+to set the start and end around it, preview the selection, and save a separate
+video. Open **Matches** to review and share clips by match, map, and round.
+Markers and match recaps appear on new clips with CS2 game updates.
 When capture is set to run only with CS2, Aegis keeps the last completed replay
 segments available for 30 seconds after the game closes.
 
@@ -55,11 +59,9 @@ connected destinations available for manual sharing only.
 **Compact recording** in Recording settings reduces bitrate for future built-in captures while keeping
 their resolution and frame rate. The exact file size and detail depend on the scene.
 
-To include audio with the built-in recorder, turn on **Capture speaker audio**
-under **Settings → Recording**. This records sound from the default Windows
-playback device, including other apps using it. To capture CS2 audio separately,
-choose **OBS Studio** and configure an Application Audio Capture source, Replay
-Buffer, and the WebSocket server in OBS.
+In **Settings → Recording**, select **CS2 only** to capture game audio on Windows
+11. Choose **Desktop audio** to capture sounds from the default playback device.
+If you use OBS Studio, choose audio sources in OBS.
 
 ## Troubleshooting
 

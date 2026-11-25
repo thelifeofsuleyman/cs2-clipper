@@ -44,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
         "capture": "ddagrab",          # ddagrab (fullscreen-safe) | gdigrab
         "prioritize_game_fps": True,   # direct GPU capture and lighter in-game processing
         "speaker_audio": False,        # opt in to recording the default playback device
+        "audio_source": "",             # blank inherits speaker_audio from older settings
         "compact_video": False,        # quality-based encoding for smaller clips
         "buffer_seconds": 45,          # rolling buffer length kept on disk
         "clip_seconds": 30,            # how much to save per kill streak
@@ -124,6 +125,12 @@ class Config:
 
     def as_dict(self) -> dict[str, Any]:
         return copy.deepcopy(self._data)
+
+    def audio_source(self) -> str:
+        source = self.get("recording.audio_source", "")
+        if source in ("off", "desktop", "cs2"):
+            return source
+        return "desktop" if not source and self.get("recording.speaker_audio") is True else "off"
 
     def save(self) -> None:
         with self._lock:

@@ -146,6 +146,23 @@ dialog::backdrop{background:#000a}
 .capture-panel h2{font-size:16px;line-height:1.25;margin:0 0 3px}
 .capture-panel p{margin:0;color:var(--muted);max-width:62ch;overflow-wrap:anywhere}
 .capture-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;flex:none}
+.capture-panel .receipt{margin-top:6px;color:var(--ok)}
+.capture-panel .receipt[data-error=true]{color:var(--warn)}
+.storage-warning{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;
+  gap:10px;padding:12px 16px;margin:-12px 0 24px;color:var(--warn);background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--r)}
+.match-group{grid-column:1/-1;border:1px solid var(--line);border-radius:var(--r2);background:var(--panel)}
+.match-group summary{padding:16px;cursor:pointer;overflow-wrap:anywhere}
+.match-group summary span{color:var(--muted);font-size:13px;margin-left:9px}
+.match-round{padding:0 16px 16px}
+.match-round h3{margin:0 0 8px;font-size:14px;color:var(--muted)}
+.kill-timeline{margin:10px 0 14px;color:var(--muted);font-size:13px}
+.kill-track{position:relative;margin:6px 12px 0;height:26px}
+.kill-track::before{content:'';position:absolute;inset:11px 0 auto;height:4px;
+  border-radius:4px;background:var(--line2)}
+.kill-track button{position:absolute;top:3px;transform:translateX(-50%);width:20px;height:20px;
+  min-width:0;padding:0;border:2px solid var(--panel);border-radius:50%;background:var(--accent)}
+.kill-track button:hover{background:var(--txt);z-index:1}
 .library-bar{justify-content:space-between;min-height:43px}
 .library-count{color:var(--muted);font-size:13px}
 .library-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -191,6 +208,7 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   <div class=brand><svg class=logo width=28 height=28 viewBox="0 0 48 48" fill=none><path d="M24 3 41 9 41 24 C41 35 33 42 24 45 C15 42 7 35 7 24 L7 9 Z" fill="#161b24" stroke="#ff5a3c" stroke-width="2.6"/><path d="M20 16 33 24 20 32 Z" fill="#ff5a3c"/></svg> Aegis Clipper</div>
   <nav aria-label="Main navigation">
     <button class=rail-item data-tab=clips aria-pressed=true>%FILM_ICON% Clip library</button>
+    <button class=rail-item data-tab=matches aria-pressed=false><svg class=ico viewBox="0 0 24 24" aria-hidden=true><path d="M4 6h16M4 12h16M4 18h10"/></svg> Matches</button>
     <button class=rail-item data-tab=favorites aria-pressed=false>%STAR_ICON% Favorites</button>
     <button class=rail-item data-tab=logs aria-pressed=false>%ACTIVITY_ICON% Activity</button>
     <a class=rail-item href="/setup">%SETTINGS_ICON% Settings</a>
@@ -216,13 +234,17 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   <section class=capture-panel id=capturePanel aria-label="Capture status">
     <div class=capture-info>
       <span class=capture-symbol>%ACTIVITY_ICON%</span>
-      <div><h2 id=captureTitle>Connecting to Aegis</h2><p id=captureDetail aria-live=polite>Checking the replay buffer.</p></div>
+      <div><h2 id=captureTitle>Connecting to Aegis</h2><p id=captureDetail aria-live=polite>Checking the replay buffer.</p>
+        <p class=receipt id=replayReceipt role=status></p></div>
     </div>
     <div class=capture-actions>
       <a class=settings-link href="/setup#connection" id=connectionLink>CS2 setup</a>
       <button class=primary id=saveReplay disabled>Save replay</button>
     </div>
   </section>
+
+  <div class=storage-warning id=storageWarning hidden><span id=storageMessage role=status></span>
+    <button id=reviewStorage>Review largest clips</button></div>
 
   <section data-panel=clips>
     <div class="bar library-bar">
@@ -254,6 +276,9 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   </div>
   <video id=player controls playsinline></video>
   <p class=player-error id=playerError hidden>Could not play this video. It may have moved or use an unsupported format.</p>
+  <div class=kill-timeline id=killTimeline hidden><span id=killTimelineLabel>Jump to a kill</span>
+    <div class=kill-track id=killTrack role=group aria-labelledby=killTimelineLabel></div>
+    <span id=killPosition role=status></span></div>
   <details class=trim-editor id=trimEditor hidden>
     <summary>Trim clip</summary>
     <div class=trim-timeline aria-hidden=true><span id=trimWindow></span></div>
@@ -330,9 +355,11 @@ function openTab(tab) {
   const previous = activePage;
   activePage = tab;
   for (const b of $$('.rail button[data-tab]')) b.setAttribute('aria-pressed', b.dataset.tab === tab);
-  $('#pageTitle').textContent = {clips:'Clip library', favorites:'Favorites', logs:'Activity'}[tab];
+  $('#pageTitle').textContent = {clips:'Clip library', matches:'Matches', favorites:'Favorites', logs:'Activity'}[tab];
   $('section[data-panel=clips]').hidden = tab === 'logs';
   $('section[data-panel=logs]').hidden = tab !== 'logs';
+  $('#clipFilter').hidden = tab === 'matches';
+  $('#clipSort').hidden = tab === 'matches';
   if (tab === 'logs') loadLogs();
   else if (previous !== tab) {
     $('#clipSearch').value = '';
@@ -366,14 +393,37 @@ async function loadStatus() {
   const detail = s.pending_kills && s.capturing && s.gsi_connected
     ? s.pending_kills + (s.pending_kills === 1 ? ' kill in the current highlight.' : ' kills in the current highlight.')
     : status[1];
-  const audio = rec.audio === 'unavailable' ? ' Speaker audio is unavailable.' : '';
+  const audioName = rec.audio_source === 'cs2' ? 'CS2-only audio' : 'desktop audio';
+  const audio = rec.audio === 'unavailable' ? ' ' + (rec.audio_detail ||
+    (rec.audio_source === 'cs2' ? 'CS2-only audio is unavailable.' : 'Desktop audio is unavailable.')) : '';
   if ($('#captureDetail').textContent !== detail + audio) $('#captureDetail').textContent = detail + audio;
+  const receipt = $('#replayReceipt');
+  if (s.replay_receipt && receipt.dataset.id !== s.replay_receipt.id) {
+    const {id, ok, message} = s.replay_receipt;
+    receipt.dataset.id = id;
+    receipt.dataset.error = !ok;
+    receipt.textContent = message;
+    if (ok) loadClips();
+  }
+  const {clips, buffer} = s.storage || {};
+  const warnings = [];
+  if (clips?.low && buffer?.low && clips.free_bytes === buffer.free_bytes) {
+    warnings.push(fileSize(clips.free_bytes) + ' free on the clip and replay buffer drive.');
+  } else {
+    if (clips?.low) warnings.push(fileSize(clips.free_bytes) + ' free on the clip drive.');
+    if (buffer?.low) warnings.push(fileSize(buffer.free_bytes) + ' free on the replay buffer drive.');
+  }
+  if (clips?.available === false) warnings.push('The clip folder is unavailable.');
+  if (buffer?.available === false) warnings.push('The replay buffer location is unavailable.');
+  const warning = warnings.join(' ');
+  if ($('#storageMessage').textContent !== warning) $('#storageMessage').textContent = warning;
+  $('#storageWarning').hidden = !warning;
   $('#capturePanel').dataset.ready = Boolean(s.replay_available);
   $('#connectionLink').hidden = Boolean(s.gsi_connected);
   replay.disabled = !s.replay_available || replay.getAttribute('aria-busy') === 'true';
   $('#footStatus').textContent = rec.encoder && rec.encoder !== '?' ? rec.encoder +
     (rec.method ? ' · ' + rec.method : '') + (rec.fps ? ' · capture target ' + rec.fps + ' fps' : '') +
-    (rec.audio ? ' · speaker audio ' + rec.audio : '') : '';
+    (rec.audio && rec.audio !== 'off' ? ' · ' + audioName + ' ' + rec.audio : '') : '';
 }
 
 $('#saveReplay').onclick = () => busy($('#saveReplay'), 'Saving replay…', async () => {
@@ -382,10 +432,19 @@ $('#saveReplay').onclick = () => busy($('#saveReplay'), 'Saving replay…', asyn
   else {
     await loadClips(true);
     openTab('clips');
-    toast('Replay saved to your library.');
+    toast(r.warning || 'Replay saved to your library.');
     playVideo(r.clip_id);
   }
 }).finally(loadStatus);
+
+$('#reviewStorage').onclick = () => {
+  openTab('clips');
+  $('#clipSearch').value = '';
+  $('#clipFilter').value = 'all';
+  $('#clipSort').value = 'largest';
+  renderClips();
+  $('#clipSort').focus();
+};
 
 async function loadClips(force = false) {
   const seq = ++clipRequest;
@@ -407,13 +466,14 @@ function renderClips() {
   const query = $('#clipSearch').value.trim().toLowerCase();
   const filter = $('#clipFilter').value;
   const favorites = activePage === 'favorites';
-  const scope = favorites ? library.filter(c => c.favorite) : library;
+  const matches = activePage === 'matches';
+  const scope = favorites ? library.filter(c => c.favorite) : matches ? library.filter(c => c.match_id) : library;
   const clips = scope.filter(c => {
     const tags = Array.isArray(c.tags) ? c.tags : [];
-    return (filter === 'all' || tags.includes('test')) &&
-      (!query || [c.title, c.map, ...tags].join(' ').toLowerCase().includes(query));
+    return (matches || filter === 'all' || tags.includes('test')) &&
+      (!query || [c.title, c.map, c.match_mode, ...tags].join(' ').toLowerCase().includes(query));
   });
-  if ($('#clipSort').value === 'largest') {
+  if (!matches && $('#clipSort').value === 'largest') {
     clips.sort((a, b) => (b.size_bytes ?? -1) - (a.size_bytes ?? -1));
   }
   const combinedSize = clips.reduce((total, clip) => total + (clip.size_bytes || 0), 0);
@@ -421,15 +481,51 @@ function renderClips() {
     (combinedSize ? ' · ' + fileSize(combinedSize) : '');
   const g = $('#clipGrid');
   if (!clips.length) {
-    const title = scope.length ? 'No matching clips' : favorites ? 'No favorites yet' : 'Your clips will appear here';
-    const detail = scope.length ? 'Try another search or filter.' : favorites ? 'Star a clip to find it here later.' :
+    const title = scope.length ? 'No matching clips' : matches ? 'No match clips yet' :
+      favorites ? 'No favorites yet' : 'Your clips will appear here';
+    const detail = scope.length ? 'Try another search or filter.' : matches ?
+      'Clips saved during a connected CS2 match appear here by map and round.' :
+      favorites ? 'Star a clip to find it here later.' :
       'Play CS2 to capture highlights automatically, or save a replay while the buffer is ready.';
     g.innerHTML = '<div class=empty><span class=empty-symbol>' + ic(favorites ? 'star' : 'film') + '</span><strong>' + title +
-      '</strong><div class=sub>' + detail + '</div>' + (!favorites && !scope.length ?
+      '</strong><div class=sub>' + detail + '</div>' + (!favorites && !matches && !scope.length ?
         '<a href="/setup#capture-test">Test your recording setup</a>' : '') + '</div>';
     return;
   }
-  g.innerHTML = clips.map(c => {
+  g.innerHTML = matches ? matchGroups(clips) : clips.map(clipCard).join('');
+  for (const card of $$('#clipGrid .card')) bindCard(card);
+}
+
+function matchGroups(clips) {
+  const previous = new Map($$('#clipGrid .match-group').map(group => [group.dataset.match, group.open]));
+  const groups = new Map();
+  for (const clip of clips) {
+    if (!groups.has(clip.match_id)) groups.set(clip.match_id, []);
+    groups.get(clip.match_id).push(clip);
+  }
+  return [...groups.entries()].sort((a,b) => b[1][0].match_started - a[1][0].match_started)
+    .map(([id, clips], index) => {
+      const first = clips[0];
+      const rounds = new Map();
+      for (const clip of clips) {
+        const round = clip.round || 0;
+        if (!rounds.has(round)) rounds.set(round, []);
+        rounds.get(round).push(clip);
+      }
+      const date = new Date((first.match_started || first.created) * 1000).toLocaleString(undefined,
+        {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+      const mode = first.match_mode ? first.match_mode.replaceAll('_', ' ') + ' · ' : '';
+      const label = mode + date + ' · ' + clips.length + (clips.length === 1 ? ' clip' : ' clips');
+      return '<details class=match-group data-match="' + escape(id) + '"' +
+        ((previous.get(id) ?? index === 0) ? ' open' : '') + '><summary><strong>' + escape(first.map) +
+        '</strong><span>' + escape(label) + '</span></summary>' +
+        [...rounds.entries()].sort((a,b) => a[0] - b[0]).map(([round, entries]) =>
+          '<section class=match-round><h3>' + (round ? 'Round ' + round : 'Round unavailable') +
+          '</h3><div class=grid>' + entries.map(clipCard).join('') + '</div></section>').join('') + '</details>';
+    }).join('');
+}
+
+function clipCard(c) {
     const id = escape(c.id), title = escape(c.title || 'Untitled');
     const kill = c.kills === 5 ? 'ACE' : c.kills ? c.kills + 'K' : '';
     const statuses = Object.entries(c.uploads || {}).filter(([name]) => name !== 'gallery');
@@ -450,8 +546,6 @@ function renderClips() {
       (c.missing ? ' disabled' : '') + '>' + ic('share') +
       '</button><button class="btn-icon danger" aria-label="Delete" title="Delete" data-delete>' + ic('trash') +
       '</button></div></div></article>';
-  }).join('');
-  for (const card of $$('#clipGrid .card')) bindCard(card);
 }
 
 function bindCard(card) {
@@ -588,6 +682,9 @@ function playVideo(id) {
   $('#trimEditor').hidden = true;
   $('#trimEditor').open = false;
   $('#trimStatus').textContent = '';
+  $('#killTimeline').hidden = true;
+  $('#killPosition').textContent = '';
+  $('#killTrack').replaceChildren();
   player.src = clipMedia(id, 'video');
   if (!playerDialog.open) playerDialog.showModal();
   $('#modalClose').focus();
@@ -596,6 +693,7 @@ function playVideo(id) {
 player.onerror = () => {
   if (player.getAttribute('src')) $('#playerError').hidden = false;
   $('#trimEditor').hidden = true;
+  $('#killTimeline').hidden = true;
 };
 $('#modalClose').onclick = () => playerDialog.close();
 playerDialog.onclose = () => {
@@ -625,6 +723,26 @@ function updateTrimWindow() {
 }
 player.onloadedmetadata = () => {
   if (!Number.isFinite(player.duration) || player.duration < 0.25) return;
+  const clip = library.find(c => c.id === playerClipId);
+  const markers = Array.isArray(clip?.kill_markers) ?
+    clip.kill_markers.filter(m => m && Number.isFinite(m.time) && m.time >= 0 && m.time < player.duration) : [];
+  const track = $('#killTrack');
+  track.replaceChildren();
+  for (const marker of markers) {
+    const button = document.createElement('button');
+    const label = (marker.kills === 1 ? 'Kill' : marker.kills + ' kills') + ' at ' + trimTime(marker.time);
+    button.style.left = (marker.time / player.duration * 100) + '%';
+    button.title = label;
+    button.setAttribute('aria-label', 'Jump to ' + label.toLowerCase());
+    button.onclick = () => {
+      previewEnd = undefined;
+      player.pause();
+      player.currentTime = marker.time;
+      $('#killPosition').textContent = label;
+    };
+    track.append(button);
+  }
+  $('#killTimeline').hidden = !markers.length;
   const max = Math.floor(player.duration * 100) / 100;
   startSlider.max = endSlider.max = max;
   startSlider.value = 0;
@@ -819,7 +937,8 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
     </div>
     <div id=builtinFields>
     <div class=row><label for=rec_clip>Manual replay length<small>Seconds saved by Save replay.</small></label><input type=number id=rec_clip min=5 max=120 value=30></div>
-    <div class=row><label for=speaker_audio>Capture speaker audio<small>Includes all sounds on the default Windows playback device.</small></label><input type=checkbox id=speaker_audio></div>
+    <div class=row><label for=audio_source>Recording audio<small>CS2 only uses Windows 11 process audio. Desktop captures sounds from the default playback device.</small></label>
+      <select id=audio_source><option value=off>Off</option><option value=cs2>CS2 only</option><option value=desktop>Desktop audio</option></select></div>
     <div class=row><label for=rec_compact>Compact recording<small>Uses less video bitrate while keeping the recording resolution and frame rate. Fine detail can change.</small></label><input type=checkbox id=rec_compact></div>
     <div class=row><label for=rec_performance>Prioritize game FPS<small>Records at up to 30 FPS, uses the GPU directly when supported, and skips highlight effects.</small></label><input type=checkbox id=rec_performance checked></div>
     <div class=row><label for=rec_gate>Capture only while CS2 is open</label><input type=checkbox id=rec_gate checked></div>
@@ -942,7 +1061,7 @@ async function loadExisting() {
   $('#rec_backend').value = r.backend === 'obs' ? 'obs' : 'builtin';
   $('#rec_preset').value = r.preset || 'medium';
   $('#rec_performance').checked = r.prioritize_game_fps !== false;
-  $('#speaker_audio').checked = Boolean(r.speaker_audio);
+  $('#audio_source').value = r.audio_source || (r.speaker_audio ? 'desktop' : 'off');
   $('#rec_compact').checked = Boolean(r.compact_video);
   $('#clips_dir').value = (c.storage || {}).clips_dir || '';
   $('#replay_hotkey').value = (c.hotkeys || {}).replay || '';
@@ -982,7 +1101,7 @@ function readSettings() {
       cs2_cfg_dir:$('#cs2_cfg_dir').value.trim()},
     recording:{backend, preset:$('#rec_preset').value,
       prioritize_game_fps:$('#rec_performance').checked,
-      speaker_audio:$('#speaker_audio').checked,
+      audio_source:$('#audio_source').value,
       compact_video:$('#rec_compact').checked,
       clip_seconds:backend === 'obs' && (!clip.value || !clip.checkValidity()) ? savedSettings?.recording.clip_seconds : clip.valueAsNumber,
       only_when_game_running:$('#rec_gate').checked},
