@@ -1,6 +1,7 @@
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -133,6 +134,37 @@ def test_builtin_save_without_capture_returns_none(cfg, tmp_path):
     # never started -> no process -> graceful None, no exception
     assert rec.save(30, tmp_path / "out.mp4") is None
     assert rec.status()["backend"] == "builtin"
+
+
+def test_completed_buffer_can_be_saved_after_game_closes(cfg, tmp_path, monkeypatch):
+    rec = recorder.BuiltinRecorder(cfg)
+    rec._stage = "ready"
+    rec._proc = SimpleNamespace(poll=lambda: None)
+    now = [100.0]
+    monkeypatch.setattr(recorder, "time", SimpleNamespace(monotonic=lambda: now[0], time=lambda: now[0]))
+    monkeypatch.setattr(rec, "_terminate", lambda _: None)
+    monkeypatch.setattr(recorder.media, "resolve_ffmpeg", lambda _: "ffmpeg")
+    for i in range(3):
+        (rec._bdir / f"seg_{i:03d}.ts").write_bytes(b"segment")
+
+    def remux(cmd, **_):
+        listing = Path(cmd[cmd.index("-i") + 1]).read_text()
+        assert listing.count("file ") == 2   # Skip the unfinished segment.
+        Path(cmd[-1]).write_bytes(b"replay")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(recorder.media, "_run", remux)
+    rec._game_closed()
+    status = rec.status()
+    assert status["capturing"] is False
+    assert status["replay_available"] and status["replay_expires_in"] == 30
+    assert rec.save(30, tmp_path / "replay.mp4") == tmp_path / "replay.mp4"
+
+    now[0] += recorder.REPLAY_GRACE_SECONDS
+    rec._game_closed()
+    assert not rec.status()["replay_available"]
+    assert rec.save(30, tmp_path / "expired.mp4") is None
+    assert not list(rec._bdir.glob("seg_*.ts"))
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows process table")

@@ -80,10 +80,6 @@ main{width:100%;max-width:min(1560px,96vw);margin:0 auto;padding:clamp(16px,2.2v
 .modal{position:fixed;inset:0;background:rgba(5,7,10,.85);backdrop-filter:blur(6px);display:none;
   align-items:center;justify-content:center;z-index:50;padding:30px}
 .modal.show{display:flex}
-.modal video{max-width:92vw;max-height:82vh;border-radius:var(--r2);background:#000;box-shadow:var(--shadow)}
-.modal .close{position:absolute;top:18px;right:22px;width:40px;height:40px;border-radius:50%;
-  background:rgba(255,255,255,.08);border:none;color:#fff;display:grid;place-items:center;cursor:pointer}
-.modal .close:hover{background:rgba(255,255,255,.16)}
 .dialog{background:var(--panel);border:1px solid var(--line2);border-radius:var(--r2);
   padding:24px;max-width:430px;box-shadow:var(--shadow)}
 .dialog h3{margin:0 0 8px;font-size:17px}
@@ -91,6 +87,25 @@ main{width:100%;max-width:min(1560px,96vw);margin:0 auto;padding:clamp(16px,2.2v
 .dialog-actions{display:flex;gap:10px;flex-wrap:wrap}
 dialog.dialog{color:var(--txt);width:min(430px,calc(100% - 32px))}
 dialog::backdrop{background:#000a}
+.video-dialog{width:min(920px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;
+  margin:auto;padding:18px;color:var(--txt);background:var(--panel);border:1px solid var(--line2);
+  border-radius:var(--r2);box-shadow:var(--shadow)}
+.video-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+.video-head h2{font-size:18px;margin:0;overflow-wrap:anywhere}
+.video-dialog video{display:block;width:100%;max-height:52vh;background:#000;border-radius:var(--r)}
+.player-error{color:var(--warn)}
+.trim-editor{margin-top:12px}
+.trim-editor summary{cursor:pointer;font-weight:650}
+.trim-timeline{position:relative;height:5px;background:var(--line2);border-radius:5px;margin:16px 0}
+.trim-timeline span{position:absolute;height:100%;background:var(--accent);border-radius:5px}
+.trim-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:14px}
+.trim-edge{display:grid;gap:7px}
+.trim-edge label{display:flex;justify-content:space-between;gap:5px;color:var(--muted)}
+.trim-edge output{color:var(--txt);font-variant-numeric:tabular-nums}
+.trim-edge input{width:100%;padding:0;margin:0;accent-color:var(--accent);cursor:ew-resize}
+.trim-edge button{justify-self:start;font-size:12px;padding:5px 8px}
+.trim-status{color:var(--muted);margin:8px 0 0}
+.trim-status:empty{display:none}
 .share-copy{margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}
 .share-copy label{display:block;font-weight:600;margin-bottom:6px}
 .share-copy p{margin:8px 0}
@@ -149,7 +164,6 @@ dialog::backdrop{background:#000a}
 .empty .sub{color:var(--muted)}
 .loading-msg,.panel-error{grid-column:1/-1;color:var(--muted);padding:24px}
 .panel-error{color:var(--warn)}
-.modal .player-error{position:absolute;bottom:14%;background:var(--panel);padding:14px;border-radius:var(--r)}
 .toast{pointer-events:none;max-width:min(560px,92vw)}
 button[aria-busy=true]{cursor:progress}
 @media(max-width:925px){.capture-panel{align-items:flex-start;flex-direction:column}}
@@ -233,7 +247,35 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 </main>
 </div>
 
-<div class=modal id=modal role=dialog aria-modal=true aria-label="Video player"><button class=close id=modalClose aria-label="Close video"><svg class=ico viewBox="0 0 24 24"><line x1=18 y1=6 x2=6 y2=18/><line x1=6 y1=6 x2=18 y2=18/></svg></button><video id=player controls playsinline></video><p class=player-error id=playerError hidden>Could not play this video. It may have moved or use an unsupported format.</p></div>
+<dialog class=video-dialog id=modal aria-label="Video player">
+  <div class=video-head>
+    <h2 id=playerTitle>Clip</h2>
+    <button class=btn-icon id=modalClose aria-label="Close video"><svg class=ico viewBox="0 0 24 24" aria-hidden=true><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <video id=player controls playsinline></video>
+  <p class=player-error id=playerError hidden>Could not play this video. It may have moved or use an unsupported format.</p>
+  <details class=trim-editor id=trimEditor hidden>
+    <summary>Trim clip</summary>
+    <div class=trim-timeline aria-hidden=true><span id=trimWindow></span></div>
+    <div class=trim-grid>
+      <div class=trim-edge>
+        <label for=trimStart>Start <output id=trimStartTime for=trimStart></output></label>
+        <input id=trimStart type=range min=0 step=.01 aria-label="Trim start">
+        <button class=ghost id=markStart>Set start here</button>
+      </div>
+      <div class=trim-edge>
+        <label for=trimEnd>End <output id=trimEndTime for=trimEnd></output></label>
+        <input id=trimEnd type=range min=0 step=.01 aria-label="Trim end">
+        <button class=ghost id=markEnd>Set end here</button>
+      </div>
+    </div>
+    <div class=dialog-actions>
+      <button id=previewTrim>Preview selection</button>
+      <button class=primary id=saveTrim disabled>Save trimmed copy</button>
+    </div>
+    <p class=trim-status id=trimStatus role=status></p>
+  </details>
+</dialog>
 <dialog class=dialog id=shareDialog aria-labelledby=shareTitle>
   <h3 id=shareTitle>Share clip</h3>
   <p id=shareName></p>
@@ -270,7 +312,7 @@ const ICONS={
 const ic=n=>`<svg class=ico viewBox="0 0 24 24">${ICONS[n]||''}</svg>`;
 const PLAY=`<div class=play><div class=pbtn>${ic('play')}</div></div>`;
 let library = [], activePage = 'clips', clipRequest = 0, fingerprint = '';
-let playerTrigger;
+let playerTrigger, playerClipId, playerGeneration = 0, previewEnd;
 let shareId, shareGeneration = 0, shareUrl;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
   '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
@@ -311,7 +353,10 @@ async function loadStatus() {
     error: ['Capture unavailable', rec.detail || 'Open Activity to see recording errors.'],
     idle: ['Capture idle', rec.backend === 'obs' ? 'Start the Replay Buffer in OBS.' : 'Open CS2 or check capture settings.']
   };
-  const status = s.error ? ['Aegis disconnected', s.error] : s.capturing
+  const retained = s.replay_available && !s.capturing;
+  const status = s.error ? ['Aegis disconnected', s.error] : retained
+    ? ['Last replay available', 'Save your last replay before the buffer expires in ' + rec.replay_expires_in + 's.']
+    : s.capturing
     ? ['Replay buffer ready', s.gsi_connected
       ? (s.automatic_highlights === false ? 'Automatic highlights are off. You can still save replays.'
          : 'CS2 is connected. Highlights save automatically when your streak ends.')
@@ -323,9 +368,9 @@ async function loadStatus() {
     : status[1];
   const audio = rec.audio === 'unavailable' ? ' Speaker audio is unavailable.' : '';
   if ($('#captureDetail').textContent !== detail + audio) $('#captureDetail').textContent = detail + audio;
-  $('#capturePanel').dataset.ready = Boolean(s.capturing);
+  $('#capturePanel').dataset.ready = Boolean(s.replay_available);
   $('#connectionLink').hidden = Boolean(s.gsi_connected);
-  replay.disabled = !s.capturing || replay.getAttribute('aria-busy') === 'true';
+  replay.disabled = !s.replay_available || replay.getAttribute('aria-busy') === 'true';
   $('#footStatus').textContent = rec.encoder && rec.encoder !== '?' ? rec.encoder +
     (rec.method ? ' · ' + rec.method : '') + (rec.fps ? ' · capture target ' + rec.fps + ' fps' : '') +
     (rec.audio ? ' · speaker audio ' + rec.audio : '') : '';
@@ -338,7 +383,7 @@ $('#saveReplay').onclick = () => busy($('#saveReplay'), 'Saving replay…', asyn
     await loadClips(true);
     openTab('clips');
     toast('Replay saved to your library.');
-    playVideo(clipMedia(r.clip_id, 'video'));
+    playVideo(r.clip_id);
   }
 }).finally(loadStatus);
 
@@ -412,7 +457,7 @@ function renderClips() {
 function bindCard(card) {
   const id = card.dataset.id;
   const title = card.querySelector('[data-title]');
-  card.querySelector('[data-play]').onclick = () => playVideo(clipMedia(id, 'video'));
+  card.querySelector('[data-play]').onclick = () => playVideo(id);
   title.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } };
   title.onblur = async () => {
     const text = title.textContent.trim();
@@ -528,28 +573,114 @@ $('#copyDiagnostics').onclick = () => busy($('#copyDiagnostics'), 'Copying…', 
   }
 });
 
-function playVideo(url) {
-  playerTrigger = document.activeElement;
+const player = $('#player');
+const playerDialog = $('#modal');
+const startSlider = $('#trimStart');
+const endSlider = $('#trimEnd');
+
+function playVideo(id) {
+  if (!playerDialog.open) playerTrigger = document.activeElement;
+  playerClipId = id;
+  playerGeneration++;
+  previewEnd = undefined;
+  $('#playerTitle').textContent = library.find(clip => clip.id === id)?.title || 'Clip';
   $('#playerError').hidden = true;
-  $('#player').src = url;
-  $('#modal').classList.add('show');
+  $('#trimEditor').hidden = true;
+  $('#trimEditor').open = false;
+  $('#trimStatus').textContent = '';
+  player.src = clipMedia(id, 'video');
+  if (!playerDialog.open) playerDialog.showModal();
   $('#modalClose').focus();
-  $('#player').play().catch(() => {});
+  player.play().catch(() => {});
 }
-$('#player').onerror = () => {
-  if ($('#player').getAttribute('src')) $('#playerError').hidden = false;
+player.onerror = () => {
+  if (player.getAttribute('src')) $('#playerError').hidden = false;
+  $('#trimEditor').hidden = true;
 };
-$('#modalClose').onclick = () => {
-  const player = $('#player');
-  $('#modal').classList.remove('show');
+$('#modalClose').onclick = () => playerDialog.close();
+playerDialog.onclose = () => {
+  playerGeneration++;
+  previewEnd = undefined;
   player.pause();
   player.removeAttribute('src');
   player.load();
-  playerTrigger?.focus();
+  const target = playerTrigger?.isConnected ? playerTrigger : $('.rail button[data-tab=clips]');
+  target?.focus();
 };
-$('#modal').onclick = e => { if (e.target === $('#modal')) $('#modalClose').click(); };
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && $('#modal').classList.contains('show')) $('#modalClose').click();
+
+function trimTime(seconds) {
+  return Math.floor(seconds / 60) + ':' + (seconds % 60).toFixed(2).padStart(5, '0');
+}
+function updateTrimWindow() {
+  const start = startSlider.valueAsNumber;
+  const end = endSlider.valueAsNumber;
+  $('#trimStartTime').textContent = trimTime(start);
+  $('#trimEndTime').textContent = trimTime(end);
+  startSlider.setAttribute('aria-valuetext', trimTime(start));
+  endSlider.setAttribute('aria-valuetext', trimTime(end));
+  const save = $('#saveTrim');
+  save.disabled = (start === 0 && end === Number(endSlider.max)) || save.getAttribute('aria-busy') === 'true';
+  $('#trimWindow').style.left = (start / player.duration * 100) + '%';
+  $('#trimWindow').style.width = ((end - start) / player.duration * 100) + '%';
+}
+player.onloadedmetadata = () => {
+  if (!Number.isFinite(player.duration) || player.duration < 0.25) return;
+  const max = Math.floor(player.duration * 100) / 100;
+  startSlider.max = endSlider.max = max;
+  startSlider.value = 0;
+  endSlider.value = max;
+  updateTrimWindow();
+  $('#trimEditor').hidden = false;
+};
+$('#trimEditor').ontoggle = () => {
+  if ($('#trimEditor').open) player.pause();
+};
+function setTrimBoundary(slider, value, seek) {
+  previewEnd = undefined;
+  const lower = slider === startSlider ? 0 : startSlider.valueAsNumber + 0.25;
+  const upper = slider === startSlider ? endSlider.valueAsNumber - 0.25 : Number(endSlider.max);
+  slider.value = Math.min(upper, Math.max(lower, value)).toFixed(2);
+  if (seek) {
+    player.pause();
+    player.currentTime = slider.valueAsNumber;
+  }
+  updateTrimWindow();
+}
+startSlider.oninput = () => setTrimBoundary(startSlider, startSlider.valueAsNumber, true);
+endSlider.oninput = () => setTrimBoundary(endSlider, endSlider.valueAsNumber, true);
+$('#markStart').onclick = () => setTrimBoundary(startSlider, player.currentTime, true);
+$('#markEnd').onclick = () => setTrimBoundary(endSlider, player.currentTime, true);
+$('#previewTrim').onclick = () => {
+  previewEnd = endSlider.valueAsNumber;
+  player.currentTime = startSlider.valueAsNumber;
+  player.play().catch(() => {});
+};
+player.ontimeupdate = () => {
+  if (previewEnd !== undefined && player.currentTime >= previewEnd) {
+    const stop = previewEnd;
+    previewEnd = undefined;
+    player.pause();
+    player.currentTime = stop;
+  }
+};
+$('#saveTrim').onclick = () => busy($('#saveTrim'), 'Saving copy…', async () => {
+  const generation = playerGeneration;
+  previewEnd = undefined;
+  player.pause();
+  $('#trimStatus').textContent = 'Saving a separate clip to your library…';
+  const result = await api(clipApi(playerClipId) + '/trim',
+    jsonPost({start:startSlider.valueAsNumber, end:endSlider.valueAsNumber}), 170000);
+  if (!result.ok) {
+    const message = result.error || 'Could not trim this clip.';
+    if (playerDialog.open && playerGeneration === generation) $('#trimStatus').textContent = message;
+    else toast(message);
+    return;
+  }
+  await loadClips(true);
+  if (playerDialog.open && playerGeneration === generation) playVideo(result.clip.id);
+  toast('Trimmed copy saved.');
+}).finally(() => {
+  if (playerDialog.open && !$('#trimEditor').hidden) updateTrimWindow();
 });
 
 let updatePoll;

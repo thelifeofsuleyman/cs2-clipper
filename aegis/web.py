@@ -36,7 +36,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     app.config.update(MAX_CONTENT_LENGTH=256 * 1024, AEGIS_SESSION=secrets.token_hex(32))
     session = app.config["AEGIS_SESSION"]
     media_job = threading.Lock()
-    share_export = threading.Lock()
+    clip_edit = threading.Lock()
     release_checker = update.ReleaseChecker(cfg)
 
     @app.before_request
@@ -120,7 +120,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
             version=__version__,
             capture={key: recorder_status[key] for key in ("backend", "state", "encoder", "method", "fps", "audio")
                      if key in recorder_status},
-            buffer_ready=status["capturing"],
+            buffer_ready=status["replay_available"],
             game_updates_connected=status["gsi_connected"],
             prioritize_game_fps=bool(cfg.get("recording.prioritize_game_fps", True)),
             this_session=engine.replay_metrics(),
@@ -214,7 +214,31 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
             return send_file(BytesIO(data), download_name=f"{source.stem}-share.mp4",
                              as_attachment=True, mimetype="video/mp4")
 
-        return run_media_job(export, share_export)
+        return run_media_job(export, clip_edit)
+
+    @app.post("/api/clips/<clip_id>/trim")
+    def api_trim_clip(clip_id: str):
+        clip = catalog.get(clip_id)
+        source = Path(clip.path) if clip else None
+        if source is None or source.suffix.lower() not in _VIDEO_MIME or not source.is_file():
+            return jsonify(error="Clip file missing."), 404
+        body = request.get_json(silent=True)
+        start = body.get("start") if isinstance(body, dict) else None
+        end = body.get("end") if isinstance(body, dict) else None
+        if (type(start) not in (float, int) or type(end) not in (float, int)
+                or not 0 <= start < end < float("inf") or end - start < 0.249):
+            return jsonify(error="Choose at least 0.25 seconds within the clip."), 400
+
+        def save_copy():
+            try:
+                trimmed = engine.trim_clip(clip, start, end)
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
+            if not trimmed:
+                return jsonify(error="Could not trim the clip. See Activity for details."), 422
+            return jsonify(ok=True, clip=_clip_json(trimmed)), 201
+
+        return run_media_job(save_copy, clip_edit)
 
     # ───────── media streaming (range-enabled for seeking) ─────────
     @app.get("/clip/<clip_id>/video")

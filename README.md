@@ -42,6 +42,11 @@ under **Settings → Recording** to save a replay during a match.
 Use **Settings → Storage** to pick the folder for new clips. Sort the library by
 **Largest first** to find clips taking up space.
 
+Open a video and choose **Trim clip** to set the start and end, preview the
+selection, and save it as a separate video. The original stays in the library.
+When capture is set to run only with CS2, Aegis keeps the last completed replay
+segments available for 30 seconds after the game closes.
+
 In **Share**, download the original or prepare a local MP4 copy for a 10 MB or
 25 MB limit. Downloading a smaller copy keeps the original in your library.
 In **Settings → Sharing**, turn off **Send automatic highlights** to keep

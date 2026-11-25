@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 def _gsi(kills):
     return {"player": {"match_stats": {"kills": kills}, "team": "T"},
             "map": {"name": "de_mirage", "round": 3}}
@@ -97,6 +100,41 @@ def test_share_copy_respects_size_limit_and_clears_scratch(app_client, data_dir,
     assert not output_paths[0].parent.exists()
     assert source.stat().st_size == 10_000_001
     assert client.get("/api/clips").get_json()["clips"][0]["size_bytes"] == 10_000_001
+
+
+def test_trimming_creates_a_new_local_clip(app_client, data_dir, monkeypatch):
+    from aegis import media
+    from aegis.clips import Clip
+
+    client, cfg, catalog, _ = app_client
+    folder = data_dir / "chosen folder"
+    cfg.set("storage.clips_dir", str(folder))
+    source = data_dir / "existing.mp4"
+    source.write_bytes(b"original")
+    original = Clip(id="original", path=str(source), created=1, kills=4, title="Mirage", tags=["test"])
+    catalog.add(original)
+    monkeypatch.setattr(media, "resolve_ffmpeg", lambda _: "ffmpeg")
+    monkeypatch.setattr(media, "make_thumbnail", lambda *args: None)
+    monkeypatch.setattr(media, "probe_duration", lambda _, file: 10 if file == source else 3.25)
+
+    def trim(_ffmpeg, video, out, start, end):
+        assert video == source and (start, end) == (1.25, 4.5)
+        out.write_bytes(b"trimmed")
+        return True
+
+    monkeypatch.setattr(media, "trim_clip", trim)
+    url = "/api/clips/original/trim"
+    assert client.post(url, json={"start": -1, "end": 3}).status_code == 400
+    assert client.post(url, json={"start": 9, "end": 12}).status_code == 400
+    response = client.post(url, json={"start": 1.25, "end": 4.5})
+    assert response.status_code == 201
+    edited = response.get_json()["clip"]
+    assert edited["id"] != original.id and edited["title"] == "Mirage (trim)"
+    assert edited["kills"] == 0 and edited["tags"] == ["test", "trimmed"]
+    assert edited["uploads"] == {}
+    assert Path(catalog.get(edited["id"]).path).parent == folder
+    assert client.get("/clip/" + edited["id"] + "/video").data == b"trimmed"
+    assert source.read_bytes() == b"original"
 
 
 def test_config_restarts_only_the_active_recorder(app_client, monkeypatch):

@@ -151,6 +151,26 @@ def trim_replay(ffmpeg: str, source: Path, destination: Path, replay_end: float,
     return None
 
 
+def trim_clip(ffmpeg: str, source: Path, destination: Path, start: float, end: float) -> bool:
+    """Accurately seek and encode a selected range, including all audio tracks."""
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+           "-protocol_whitelist", "file,pipe", "-threads", "2", "-ss", f"{start:.3f}",
+           "-i", str(source), "-t", f"{end - start:.3f}",
+           "-map", "0:v:0", "-map", "0:a?", "-map_chapters", "-1",
+           "-filter_threads", "1", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2",
+           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
+           str(destination)]
+    try:
+        result = _run(cmd, timeout=150, background=True)
+        if result.returncode == 0 and destination.is_file() and destination.stat().st_size > 0:
+            return True
+        log(f"Clip trim failed: {result.stderr[-200:]}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"Clip trim failed: {exc}")
+    return False
+
+
 def make_test_clip(ffmpeg: str | None, out_path: Path, seconds: int = 5) -> Path | None:
     """Generate a short synthetic clip (test pattern + tone).
 

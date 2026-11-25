@@ -62,8 +62,16 @@ class Catalog:
 
     def add(self, clip: Clip) -> None:
         with self._lock:
+            previous = self._clips.get(clip.id)
             self._clips[clip.id] = clip
-            self._save_locked()
+            try:
+                self._save_locked()
+            except OSError:
+                if previous is None:
+                    del self._clips[clip.id]
+                else:
+                    self._clips[clip.id] = previous
+                raise
 
     def get(self, clip_id: str) -> Clip | None:
         with self._lock:

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -204,6 +205,7 @@ class Engine:
         return {
             "recorder": rec,
             "capturing": rec.get("capturing", False),
+            "replay_available": rec.get("replay_available", rec.get("capturing", False)),
             "pending_kills": pending,
             "automatic_highlights": self._mode_allows_highlights(mode),
             "replay_hotkey": self.replay_hotkey_state,
@@ -354,7 +356,7 @@ class Engine:
                 del self._kill_events[:event_count]
                 self._state["pending_kills"] = max(0, self._state["pending_kills"] - kills)
 
-    def _catalog_clip(self, path: Path, kills, map_name, round_n, side) -> Clip:
+    def _catalog_clip(self, path: Path, kills, map_name, round_n, side, *, title=None, tags=None) -> Clip:
         cid = f"{int(path.stat().st_mtime)}_{uuid.uuid4().hex[:6]}"
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         thumb = media.make_thumbnail(ffmpeg, path, cid)
@@ -366,14 +368,46 @@ class Engine:
             map_name=map_name,
             round_n=round_n,
             side=side,
-            title=format_caption(kills, map_name, round_n, side),
+            title=title if title is not None else format_caption(kills, map_name, round_n, side),
+            tags=tags if tags is not None else [],
             size_mb=round(path.stat().st_size / (1024 * 1024), 1),
             duration=round(media.probe_duration(ffmpeg, path), 1) if ffmpeg else 0.0,
             thumb=thumb.name if thumb else "",
         )
-        self.catalog.add(clip)
+        try:
+            self.catalog.add(clip)
+        except OSError:
+            if thumb is not None:
+                thumb.unlink(missing_ok=True)
+            raise
         log(f"Cataloged clip {cid} ({clip.size_mb} MB)")
         return clip
+
+    def trim_clip(self, original: Clip, start: float, end: float) -> Clip | None:
+        ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
+        if not ffmpeg:
+            raise ValueError("FFmpeg is unavailable.")
+        source = Path(original.path)
+        duration = media.probe_duration(ffmpeg, source)
+        if duration <= 0:
+            raise ValueError("Could not read the clip duration.")
+        # Browser and container duration can differ by an audio packet.
+        if end > duration + 0.1 or min(end, duration) - start < 0.249:
+            raise ValueError("Choose at least 0.25 seconds within the clip.")
+        folder = self.clips_dir()
+        destination = folder / f"trim_{uuid.uuid4().hex}.mp4"
+        with tempfile.TemporaryDirectory(prefix=".aegis-trim-", dir=folder) as scratch:
+            staged = Path(scratch) / "clip.mp4"
+            if not media.trim_clip(ffmpeg, source, staged, start, min(end, duration)):
+                return None
+            staged.replace(destination)
+        try:
+            title = (original.title.strip() or "Clip")[:230] + " (trim)"
+            tags = list(dict.fromkeys([*original.tags, "trimmed"]))
+            return self._catalog_clip(destination, 0, original.map_name, 0, "?", title=title, tags=tags)
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
 
     def fan_out(self, clip: Clip, caption: str, *, automatic: bool = False) -> dict[str, str]:
         """Send a clip to every enabled uploader; record per-target status."""

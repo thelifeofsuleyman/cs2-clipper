@@ -54,6 +54,7 @@ _D3D11_ENCODERS = {"h264_nvenc", "h264_amf"}
 HIGHLIGHT_HISTORY = 120
 HIGHLIGHT_LEAD = 2.0
 HIGHLIGHT_TAIL = 1.0
+REPLAY_GRACE_SECONDS = 30
 
 
 # ───────── pure helpers (unit-testable) ─────────
@@ -269,6 +270,10 @@ class BuiltinRecorder(Recorder):
         self.cfg = cfg
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
+        self._snapshot_lock = threading.Lock()
+        self._buffer_generation = 0
+        self._retained_until = 0.0
+        self._retained_speaker: SpeakerBuffer | None = None
         self._supervisor: threading.Thread | None = None
         self._stop = threading.Event()
         self._encoder = "?"
@@ -301,6 +306,9 @@ class BuiltinRecorder(Recorder):
         whose ffmpeg writes to the same buffer dir as this one's lingering
         process — corrupting both. Joining guarantees no overlap."""
         self._stop.set()
+        with self._lock:
+            self._retained_until = 0.0
+            self._retained_speaker = None
         self._kill_proc()
         sup = self._supervisor
         if sup and sup.is_alive() and sup is not threading.current_thread():
@@ -333,11 +341,9 @@ class BuiltinRecorder(Recorder):
                 with self._lock:
                     proc = self._proc
                 if not want:
-                    self._kill_proc()
+                    self._game_closed()
                     choices = []
                     next_choice = 0
-                    self._stage = "waiting_game"
-                    self._detail = ""
                 else:
                     if proc is not None:
                         if proc.poll() is not None:
@@ -371,6 +377,19 @@ class BuiltinRecorder(Recorder):
         shutil.rmtree(self._bdir, ignore_errors=True)
         self._stage = "idle"
 
+    def _game_closed(self) -> None:
+        now = time.monotonic()
+        with self._lock:
+            if self._proc is not None and self._stage == "ready":
+                self._retained_until = now + REPLAY_GRACE_SECONDS
+                self._retained_speaker = self._speaker
+            expired = 0 < self._retained_until <= now
+        self._kill_proc()
+        if expired:
+            self._discard_segments()
+        self._stage = "waiting_game"
+        self._detail = ""
+
     def _check_segment_progress(self, segment_time: int) -> str:
         files = self._segment_entries()
         writes = sorted(mtime for _, mtime in files)
@@ -403,11 +422,7 @@ class BuiltinRecorder(Recorder):
             return
 
         bdir = self._bdir
-        for old in bdir.glob("seg_*.ts"):
-            try:
-                old.unlink()
-            except Exception:
-                pass
+        self._discard_segments()
 
         w, h, fps, bitrate = capture_options(self.cfg, encoder)
         performance = bool(self.cfg.get("recording.prioritize_game_fps", True))
@@ -486,6 +501,16 @@ class BuiltinRecorder(Recorder):
         if err:
             err.close()
 
+    def _discard_segments(self) -> None:
+        # A restarting encoder must wait until the current save has copied its files.
+        with self._snapshot_lock:
+            with self._lock:
+                self._buffer_generation += 1
+                self._retained_until = 0.0
+                self._retained_speaker = None
+            for segment in self._bdir.glob("seg_*.ts"):
+                segment.unlink(missing_ok=True)
+
     @staticmethod
     def _terminate(proc: subprocess.Popen) -> None:
         if proc.poll() is None:
@@ -505,49 +530,61 @@ class BuiltinRecorder(Recorder):
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
             return None
-        with self._lock:                       # snapshot to avoid a torn read mid-restart
+        with self._lock:
             proc = self._proc
-            speaker = self._speaker
-        if proc is None or proc.poll() is not None:
-            log("Built-in recorder isn't capturing (game not running?) — no clip")
+            generation = self._buffer_generation
+            retained = time.monotonic() < self._retained_until
+        live = proc is not None and proc.poll() is None
+        if self._stop.is_set() or not (live or retained):
+            log("Built-in recorder has no replay buffer to save")
             return None
 
         seg_time = max(1, int(self.cfg.get("recording.segment_time", 2)))
         bdir = self._bdir
         # Debounce has already allowed post-roll. Wait for the current segment
         # only while the buffer is warming up.
-        if len(list(bdir.glob("seg_*.ts"))) < 2:
+        if live and len(list(bdir.glob("seg_*.ts"))) < 2:
             self._stop.wait(min(seg_time, 2))
         offset = time.time() - time.monotonic()
-        entries = [(path, ns / 1e9 - offset) for path, ns in self._segment_entries()]
-        if ranges is None and self._stage == "ready":
+        if live and ranges is None and self._stage == "ready":
             requested_at = time.monotonic()
             # Finish the segment containing the shortcut press before copying it.
             deadline = requested_at + seg_time + 0.35
             while time.monotonic() < deadline:
-                writes = sorted(end for _, end in entries)
+                writes = sorted(ns / 1e9 - offset for _, ns in self._segment_entries())
                 if len(writes) > 1 and writes[-2] >= requested_at - 0.15:
                     break
-                if self._stop.wait(0.1) or proc.poll() is not None:
+                if self._stop.wait(0.1):
                     return None
-                entries = [(path, ns / 1e9 - offset) for path, ns in self._segment_entries()]
-        if len(entries) < 2:
-            return None
-        segs = (pick_segments(entries, seconds, seg_time) if ranges is None
-                else highlight_segments(entries, ranges, seg_time))
-        if not segs:
-            log("Built-in recorder: no buffer segments to assemble")
-            return None
+                if proc.poll() is not None:
+                    break
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
         try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="save_", dir=bdir) as snapshot:
                 temp = Path(snapshot)
                 names = []
-                for i, segment in enumerate(segs):
-                    name = f"clip_{i:03d}.ts"
-                    shutil.copyfile(segment, temp / name)
-                    names.append(name)
+                with self._snapshot_lock:
+                    with self._lock:
+                        if self._stop.is_set() or generation != self._buffer_generation:
+                            return None
+                        current = self._proc
+                        live = current is not None and current.poll() is None
+                        retained = time.monotonic() < self._retained_until
+                        if not (live or retained):
+                            return None
+                        speaker = self._speaker if live else self._retained_speaker
+                    entries = [(path, ns / 1e9 - offset) for path, ns in self._segment_entries()]
+                    if len(entries) < 2:
+                        return None
+                    segs = (pick_segments(entries, seconds, seg_time) if ranges is None
+                            else highlight_segments(entries, ranges, seg_time))
+                    if not segs:
+                        return None
+                    for i, segment in enumerate(segs):
+                        name = f"clip_{i:03d}.ts"
+                        shutil.copyfile(segment, temp / name)
+                        names.append(name)
                 listfile = temp / "concat.txt"
                 listfile.write_text("".join(f"file '{name}'\n" for name in names), encoding="utf-8")
                 cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
@@ -580,12 +617,14 @@ class BuiltinRecorder(Recorder):
         with self._lock:
             proc = self._proc
             speaker = self._speaker
+            retained = max(0, math.ceil(self._retained_until - time.monotonic()))
         ready = self._stage == "ready" and proc is not None and proc.poll() is None
         audio = "off"
         if self.cfg.get("recording.speaker_audio"):
             audio = "capturing" if speaker else "unavailable" if ready else "waiting"
         return {"backend": "builtin", "capturing": ready, "encoder": self._encoder, "fps": self._fps,
-                "method": self._method, "state": self._stage, "detail": self._detail, "audio": audio}
+                "method": self._method, "state": self._stage, "detail": self._detail, "audio": audio,
+                "replay_available": ready or bool(retained), "replay_expires_in": retained}
 
 
 # ───────── OBS backend (optional) ─────────
