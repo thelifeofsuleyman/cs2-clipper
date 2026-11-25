@@ -66,6 +66,39 @@ def test_custom_folder_and_download_original(app_client, data_dir, monkeypatch):
     assert client.get("/clip/" + result["clip_id"] + "/video").data == b"new video"
 
 
+def test_share_copy_respects_size_limit_and_clears_scratch(app_client, data_dir, monkeypatch):
+    from aegis import media
+    from aegis.clips import Clip
+
+    client, _, catalog, _ = app_client
+    source = data_dir / "recording.mp4"
+    source.write_bytes(b"original")
+    catalog.add(Clip(id="video", path=str(source), created=1))
+    url = "/api/clips/video/export"
+    assert client.post(url, json={"max_mb": 0}).status_code == 400
+    original = client.post(url, json={"max_mb": 10})
+    assert original.headers["X-Aegis-Original"] == "1" and original.data == b"original"
+
+    with source.open("r+b") as content:
+        content.truncate(10_000_001)
+    output_paths = []
+
+    def encode(ffmpeg, video, out, max_bytes):
+        assert video == source and max_bytes == 10_000_000
+        output_paths.append(out)
+        out.write_bytes(b"fit video")
+        return True
+
+    monkeypatch.setattr(media, "resolve_ffmpeg", lambda _: "ffmpeg")
+    monkeypatch.setattr(media, "reencode_to_fit", encode)
+    exported = client.post(url, json={"max_mb": 10})
+    assert exported.mimetype == "video/mp4" and exported.data == b"fit video"
+    assert "recording-share.mp4" in exported.headers["Content-Disposition"]
+    assert not output_paths[0].parent.exists()
+    assert source.stat().st_size == 10_000_001
+    assert client.get("/api/clips").get_json()["clips"][0]["size_bytes"] == 10_000_001
+
+
 def test_config_restarts_only_the_active_recorder(app_client, monkeypatch):
     client, cfg, _, engine = app_client
     cfg.set("first_run", False)

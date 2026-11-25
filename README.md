@@ -39,9 +39,15 @@ Automatic highlights skip Deathmatch by default. Change the mode filter in
 the person you are spectating don't trigger a clip. Set a global replay shortcut
 under **Settings → Recording** to save a replay during a match.
 
-Use **Settings → Storage** to pick the folder for new clips. **Share → Download
-video** exports the original file without an account. **Compact recording** in
-Recording settings reduces bitrate for future built-in captures while keeping
+Use **Settings → Storage** to pick the folder for new clips. Sort the library by
+**Largest first** to find clips taking up space.
+
+In **Share**, download the original or prepare a local MP4 copy for a 10 MB or
+25 MB limit. Downloading a smaller copy keeps the original in your library.
+In **Settings → Sharing**, turn off **Send automatic highlights** to keep
+connected destinations available for manual sharing only.
+
+**Compact recording** in Recording settings reduces bitrate for future built-in captures while keeping
 their resolution and frame rate. The exact file size and detail depend on the scene.
 
 To include audio with the built-in recorder, turn on **Capture speaker audio**

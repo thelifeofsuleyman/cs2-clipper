@@ -29,6 +29,34 @@ def test_unconfigured_targets_report_not_configured(cfg, tmp_path):
     assert not uploaders.YouTubeUploader(cfg).send(f, "cap").ok
 
 
+def test_discord_uploads_a_bounded_copy_from_a_separate_folder(cfg, tmp_path, monkeypatch):
+    from aegis.uploaders import discord
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"recording")
+    cfg.set("uploads.discord.webhook_url", "https://discord.com/api/webhooks/1/test-token")
+    cfg.set("uploads.discord.max_mb", 0.000007)
+    copies = []
+
+    def encode(_ffmpeg, video, out, limit):
+        assert video == source and limit == 7
+        assert out.parent != source.parent
+        out.write_bytes(b"copy")
+        copies.append(out)
+        return True
+
+    def post(_url, *, files, **kwargs):
+        assert files["file"][1].read() == b"copy"
+        assert kwargs["allow_redirects"] is False
+        return SimpleNamespace(status_code=204)
+
+    monkeypatch.setattr(discord.media, "reencode_to_fit", encode)
+    monkeypatch.setattr(discord.requests, "post", post)
+    assert uploaders.DiscordUploader(cfg).send(source, "Clip").ok
+    assert not copies[0].parent.exists()
+    assert source.read_bytes() == b"recording"
+
+
 # ───────── update semver ─────────
 def test_semver_compare():
     assert update.is_newer("v2.1.0", "2.0.0")
@@ -55,6 +83,36 @@ def test_update_requires_exact_installer_and_digest(cfg, monkeypatch):
     assert update.check(cfg).asset_url == url
     asset["name"] = "other.exe"
     assert update.check(cfg).asset_url == ""
+
+
+def test_update_checks_are_reused_until_github_allows_retry(cfg, monkeypatch):
+    clock = [1_000.0]
+    calls = []
+    limited = SimpleNamespace(status_code=429, headers={"X-RateLimit-Remaining": "0",
+                                                       "X-RateLimit-Reset": "1065"})
+    success = SimpleNamespace(status_code=200, json=lambda: {"tag_name": "v99.0.0", "assets": []})
+    monkeypatch.setattr(update, "time", SimpleNamespace(time=lambda: clock[0], monotonic=lambda: clock[0]))
+
+    def get(*args, **kwargs):
+        calls.append(True)
+        return limited if len(calls) == 1 else success
+
+    monkeypatch.setattr(update.requests, "get", get)
+    checker = update.ReleaseChecker(cfg)
+    first = checker.check()
+    assert first.error and first.retry_at == 1065
+    clock[0] += 31
+    assert checker.check(manual=True) == first
+    assert len(calls) == 1
+    clock[0] = 1065
+    assert checker.check(manual=True).info.version == "99.0.0"
+    clock[0] += 20
+    assert checker.check().info.version == "99.0.0"
+    assert checker.check(manual=True).info.version == "99.0.0"
+    assert len(calls) == 2
+    clock[0] += 10
+    assert checker.check(manual=True).info.version == "99.0.0"
+    assert len(calls) == 3
 
 
 # ───────── catalog ─────────

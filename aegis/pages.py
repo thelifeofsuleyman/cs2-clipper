@@ -91,6 +91,11 @@ main{width:100%;max-width:min(1560px,96vw);margin:0 auto;padding:clamp(16px,2.2v
 .dialog-actions{display:flex;gap:10px;flex-wrap:wrap}
 dialog.dialog{color:var(--txt);width:min(430px,calc(100% - 32px))}
 dialog::backdrop{background:#000a}
+.share-copy{margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}
+.share-copy label{display:block;font-weight:600;margin-bottom:6px}
+.share-copy p{margin:8px 0}
+.share-copy p:empty{display:none}
+.share-copy select{width:auto}
 .bar{display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap}
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(8px);
   background:var(--panel2);border:1px solid var(--line2);padding:12px 18px;border-radius:var(--r);
@@ -211,6 +216,7 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
       <div class=library-tools>
         <label class=search>%SEARCH_ICON%<input type=search id=clipSearch aria-label="Search clips" placeholder="Search clips"></label>
         <select id=clipFilter aria-label="Filter clips"><option value=all>All clips</option><option value=test>Test clips</option></select>
+        <select id=clipSort aria-label="Sort clips"><option value=newest>Newest first</option><option value=largest>Largest first</option></select>
       </div>
     </div>
     <div class=grid id=clipGrid><div class=loading-msg>Loading clips…</div></div>
@@ -230,11 +236,21 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <div class=modal id=modal role=dialog aria-modal=true aria-label="Video player"><button class=close id=modalClose aria-label="Close video"><svg class=ico viewBox="0 0 24 24"><line x1=18 y1=6 x2=6 y2=18/><line x1=6 y1=6 x2=18 y2=18/></svg></button><video id=player controls playsinline></video><p class=player-error id=playerError hidden>Could not play this video. It may have moved or use an unsupported format.</p></div>
 <dialog class=dialog id=shareDialog aria-labelledby=shareTitle>
   <h3 id=shareTitle>Share clip</h3>
-  <p>Save a copy to attach anywhere, or send it to a connected destination.</p>
+  <p id=shareName></p>
   <div class=dialog-actions>
     <a class=settings-link id=downloadClip download>Download video</a>
     <button id=sendClip hidden>Send to destinations</button>
     <button class=ghost id=closeShare>Close</button>
+  </div>
+  <div class=share-copy>
+    <label for=shareLimit>Smaller copy</label>
+    <div class=dialog-actions>
+      <select id=shareLimit><option value=10>10 MB limit</option><option value=25>25 MB limit</option></select>
+      <button id=prepareCopy>Prepare copy</button>
+      <a class=settings-link id=downloadCopy download hidden>Download smaller copy</a>
+    </div>
+    <p>Smaller copies can reduce detail or resolution. Your original stays in the library.</p>
+    <p id=shareStatus role=status></p>
   </div>
 </dialog>
 %EXIT_DIALOG%
@@ -255,12 +271,18 @@ const ic=n=>`<svg class=ico viewBox="0 0 24 24">${ICONS[n]||''}</svg>`;
 const PLAY=`<div class=play><div class=pbtn>${ic('play')}</div></div>`;
 let library = [], activePage = 'clips', clipRequest = 0, fingerprint = '';
 let playerTrigger;
-let shareId;
+let shareId, shareGeneration = 0, shareUrl;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
   '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
 }[ch]));
 const clipApi = id => '/api/clips/' + encodeURIComponent(id);
 const clipMedia = (id, kind) => '/clip/' + encodeURIComponent(id) + '/' + kind;
+
+function fileSize(bytes) {
+  if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
+  if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
+  return Math.ceil(bytes / 1000) + ' KB';
+}
 
 function openTab(tab) {
   const previous = activePage;
@@ -346,7 +368,12 @@ function renderClips() {
     return (filter === 'all' || tags.includes('test')) &&
       (!query || [c.title, c.map, ...tags].join(' ').toLowerCase().includes(query));
   });
-  $('#clipCount').textContent = clips.length + (clips.length === 1 ? ' clip' : ' clips');
+  if ($('#clipSort').value === 'largest') {
+    clips.sort((a, b) => (b.size_bytes ?? -1) - (a.size_bytes ?? -1));
+  }
+  const combinedSize = clips.reduce((total, clip) => total + (clip.size_bytes || 0), 0);
+  $('#clipCount').textContent = clips.length + (clips.length === 1 ? ' clip' : ' clips') +
+    (combinedSize ? ' · ' + fileSize(combinedSize) : '');
   const g = $('#clipGrid');
   if (!clips.length) {
     const title = scope.length ? 'No matching clips' : favorites ? 'No favorites yet' : 'Your clips will appear here';
@@ -370,7 +397,7 @@ function renderClips() {
       (c.duration ? '<span class="badge dur">' + Math.round(c.duration) + 's</span>' : '') + PLAY + '</button>' +
       '<div class=body><div class=title contenteditable=plaintext-only role=textbox aria-label="Clip title" data-title="' +
       title + '">' + title + '</div><div class=meta>' + escape(c.map) +
-      '<span class=sep></span>' + (c.missing ? 'File missing' : c.size_mb + ' MB') + '</div>' +
+      '<span class=sep></span>' + (c.missing ? 'File missing' : fileSize(c.size_bytes || 0)) + '</div>' +
       (targets ? '<div class=targets>' + targets + '</div>' : '') +
       '<div class=actions><button class="btn-icon fav ' + (c.favorite ? 'on' : '') +
       '" data-fav aria-pressed="' + Boolean(c.favorite) + '" aria-label="Favorite" title="Favorite">' + ic('star') +
@@ -411,6 +438,9 @@ function bindCard(card) {
   const share = card.querySelector('[data-share]');
   share.onclick = () => {
     shareId = id;
+    shareGeneration++;
+    const clip = library.find(c => c.id === id);
+    $('#shareName').textContent = (clip.title || 'Untitled') + ' · ' + fileSize(clip.size_bytes || 0);
     $('#downloadClip').href = clipMedia(id, 'download');
     $('#shareDialog').showModal();
   };
@@ -426,8 +456,53 @@ function bindCard(card) {
 
 $('#clipSearch').oninput = renderClips;
 $('#clipFilter').onchange = renderClips;
+$('#clipSort').onchange = renderClips;
 $('#closeShare').onclick = () => $('#shareDialog').close();
 $('#downloadClip').onclick = () => $('#shareDialog').close();
+function clearShareCopy() {
+  if (shareUrl) URL.revokeObjectURL(shareUrl);
+  shareUrl = undefined;
+  $('#downloadCopy').hidden = true;
+  $('#downloadCopy').removeAttribute('href');
+  $('#shareStatus').textContent = '';
+}
+$('#shareDialog').onclose = clearShareCopy;
+$('#shareLimit').onchange = clearShareCopy;
+$('#prepareCopy').onclick = () => busy($('#prepareCopy'), 'Preparing…', async () => {
+  clearShareCopy();
+  const clip = library.find(c => c.id === shareId);
+  const generation = shareGeneration;
+  const limit = Number($('#shareLimit').value);
+  $('#shareLimit').disabled = true;
+  $('#shareStatus').textContent = 'Preparing the copy locally…';
+  try {
+    const response = await apiFetch(clipApi(clip.id) + '/export', jsonPost({max_mb:limit}), 240000);
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.error || 'Could not prepare the copy.');
+    }
+    const video = await response.blob();
+    if (!$('#shareDialog').open || generation !== shareGeneration) return;
+    const original = response.headers.get('X-Aegis-Original') === '1';
+    const name = (clip.title || 'Aegis clip').replace(/[<>:"/\\\\|?*]/g, '_').slice(0, 100);
+    const extension = {'video/quicktime':'.mov', 'video/x-matroska':'.mkv'}[video.type] || '.mp4';
+    shareUrl = URL.createObjectURL(video);
+    const link = $('#downloadCopy');
+    link.href = shareUrl;
+    link.download = name + (original ? extension : '-share.mp4');
+    link.textContent = original ? 'Download original' : 'Download smaller copy';
+    link.hidden = false;
+    $('#shareStatus').textContent = original ? 'Original already fits · ' + fileSize(video.size) :
+      'Copy ready · ' + fileSize(video.size);
+  } catch (error) {
+    if ($('#shareDialog').open && generation === shareGeneration) {
+      $('#shareStatus').textContent = error.name === 'TimeoutError'
+        ? 'Preparing the copy took too long. Try a larger limit.' : error.message;
+    }
+  } finally {
+    $('#shareLimit').disabled = false;
+  }
+});
 $('#sendClip').onclick = () => busy($('#sendClip'), 'Sending…', async () => {
   const id = shareId;
   $('#shareDialog').close();
@@ -484,9 +559,14 @@ function showUpdate(r) {
   $('#updateBanner').style.display = 'flex';
 }
 async function checkUpdate(manual = false) {
-  const r = await api('/api/update/check');
+  const r = await api('/api/update/check' + (manual ? '?manual=1' : ''));
   if (r.update) showUpdate(r);
-  if (manual) $('#updStatus').textContent = r.error || (r.update ? 'Update available' : 'You’re on the latest version');
+  if (manual) {
+    const retry = r.retry_at ? ' Try after ' + new Date(r.retry_at * 1000).toLocaleTimeString(
+      [], {hour:'numeric', minute:'2-digit'}) + '.' : '';
+    $('#updStatus').textContent = r.error ? r.error + retry :
+      (r.update ? 'Update available' : 'You’re on the latest version');
+  }
   const p = await api('/api/update/progress');
   if (p.state === 'downloading' || p.state === 'installing') pollUpdate();
 }
@@ -660,6 +740,9 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
   <section class=step id=sharing data-settings-panel hidden>
     <h2>Sharing destinations</h2>
     <p class=hint>Connect a destination to share clips from your library.</p>
+    <div class=row><label for=automatic_share>Send automatic highlights<small>Turn off to share only when you use the Share menu.</small></label>
+      <input id=automatic_share type=checkbox checked>
+    </div>
       <details><summary>Telegram</summary>
         <div class=row><label for=tg_en>Send to Telegram</label><input type=checkbox id=tg_en></div>
         <div class=row><label for=tg_token>Bot token</label><input id=tg_token type=password></div>
@@ -748,6 +831,7 @@ async function loadExisting() {
   $('#dc_en').checked = !!dc.enabled;
   $('#dc_url').value = dc.webhook_url || '';
   $('#yt_en').checked = !!yt.enabled;
+  $('#automatic_share').checked = u.automatic !== false;
   $('#yt_secrets').value = yt.client_secrets || '';
   $('#yt_privacy').value = yt.privacy || 'unlisted';
   savedSettings = readSettings();
@@ -775,6 +859,7 @@ function readSettings() {
     obs:{replay_dir:$('#obs_replay_dir').value.trim(), password:$('#obs_password').value,
       port:backend === 'builtin' && (!port.value || !port.checkValidity()) ? savedSettings?.obs.port : port.valueAsNumber},
     uploads:{
+      automatic:$('#automatic_share').checked,
       telegram:{enabled:$('#tg_en').checked, bot_token:$('#tg_token').value.trim(), chat_id:$('#tg_chat').value.trim()},
       discord:{enabled:$('#dc_en').checked, webhook_url:$('#dc_url').value.trim()},
       youtube:{enabled:$('#yt_en').checked, client_secrets:$('#yt_secrets').value.trim(), privacy:$('#yt_privacy').value}
@@ -939,11 +1024,14 @@ function toast(text) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 4200);
 }
 const jsonPost = body => ({method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+function apiFetch(url, options, timeout) {
+  const headers = new Headers(options?.headers);
+  headers.set('X-Aegis-Session', '%SESSION%');
+  return fetch(url, {...options, headers, signal:AbortSignal.timeout(timeout)});
+}
 async function api(url, options, timeout = 15000) {
   try {
-    const headers = new Headers(options?.headers);
-    headers.set('X-Aegis-Session', '%SESSION%');
-    const res = await fetch(url, {...options, headers, signal:AbortSignal.timeout(timeout)});
+    const res = await apiFetch(url, options, timeout);
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) return {...payload, ok:false, error:payload.error || payload.detail || 'Request failed (' + res.status + ').'};
     return payload;

@@ -8,14 +8,14 @@ fit (or ffmpeg is missing), we report a clear error rather than failing silently
 """
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
 
 import requests
 
 from .. import media
-from ..log import log
 from .base import Uploader, UploadResult
 
 
@@ -36,19 +36,17 @@ class DiscordUploader(Uploader):
             return UploadResult(False, "Enter a Discord HTTPS webhook URL")
         max_mb = float(self.cfg.get("uploads.discord.max_mb", 25))
 
-        to_send = clip
-        temp: Path | None = None
-        size_mb = clip.stat().st_size / (1024 * 1024)
-        if size_mb > max_mb:
-            ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
-            fitted = media.reencode_to_fit(ffmpeg, clip, max_mb)
-            if fitted is None:
-                return UploadResult(False, f"{size_mb:.0f} MB > {max_mb:.0f} MB and could not re-encode")
-            to_send, temp = fitted, fitted
-            if to_send.stat().st_size / (1024 * 1024) > max_mb:
-                _cleanup(temp)
-                return UploadResult(False, f"still over {max_mb:.0f} MB after re-encode")
+        max_bytes = int(max_mb * 1024 * 1024)
+        if clip.stat().st_size <= max_bytes:
+            return self._post(url, clip, caption)
+        ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
+        with TemporaryDirectory(prefix="aegis-discord-") as scratch:
+            fitted = Path(scratch) / (clip.stem + "-share.mp4")
+            if not media.reencode_to_fit(ffmpeg, clip, fitted, max_bytes):
+                return UploadResult(False, "Could not fit the clip under the configured size limit")
+            return self._post(url, fitted, caption)
 
+    def _post(self, url: str, to_send: Path, caption: str) -> UploadResult:
         try:
             with to_send.open("rb") as f:
                 r = requests.post(
@@ -60,18 +58,7 @@ class DiscordUploader(Uploader):
                 )
         except (OSError, requests.RequestException):
             return UploadResult(False, "Could not send the clip to Discord")
-        finally:
-            _cleanup(temp)
 
         if 200 <= r.status_code < 300:
             return UploadResult(True)
         return UploadResult(False, f"Discord returned HTTP {r.status_code}")
-
-
-def _cleanup(p: Path | None) -> None:
-    if p is None:
-        return
-    try:
-        p.unlink()
-    except Exception as e:
-        log(f"Could not remove temp file {p}: {e}")

@@ -14,16 +14,21 @@ import re
 import secrets
 import tempfile
 import threading
+from io import BytesIO
 from pathlib import Path
+from stat import S_ISREG
 
 from flask import Flask, Response, abort, g, jsonify, redirect, request, send_file
 
-from . import __version__, config, paths
+from . import __version__, config, media, paths, update
 from .config import Config
 from .clips import Catalog
 from .engine import Engine, format_caption
 from .log import log, recent
 from .pages import DASHBOARD_HTML, SETUP_HTML
+
+_VIDEO_MIME = {".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime"}
+_SHARE_LIMITS_MB = {10, 25}
 
 
 def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
@@ -31,6 +36,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     app.config.update(MAX_CONTENT_LENGTH=256 * 1024, AEGIS_SESSION=secrets.token_hex(32))
     session = app.config["AEGIS_SESSION"]
     media_job = threading.Lock()
+    share_export = threading.Lock()
+    release_checker = update.ReleaseChecker(cfg)
 
     @app.before_request
     def check_local_request():
@@ -64,8 +71,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         g.csp_nonce = secrets.token_hex(24)
         return page.replace("<script>", f'<script nonce="{g.csp_nonce}">').replace("%SESSION%", session)
 
-    def run_media_job(run):
-        if not media_job.acquire(blocking=False):
+    def run_media_job(run, lock=media_job):
+        if not lock.acquire(blocking=False):
             return jsonify(ok=False, error="Another video operation is still running."), 409
         try:
             return run()
@@ -73,7 +80,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
             log(f"Video operation failed: {e}")
             return jsonify(ok=False, error="Video operation failed. See Activity for details."), 500
         finally:
-            media_job.release()
+            lock.release()
 
     # ───────── GSI ingest (CS2 POSTs here) ─────────
     @app.post("/")
@@ -175,6 +182,40 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         caption = c.title or format_caption(c.kills, c.map_name, c.round_n, c.side)
         return jsonify(results=engine.fan_out(c, caption))
 
+    @app.post("/api/clips/<clip_id>/export")
+    def api_export_clip(clip_id: str):
+        c = catalog.get(clip_id)
+        source = Path(c.path) if c else None
+        if source is None or source.suffix.lower() not in _VIDEO_MIME or not source.is_file():
+            return jsonify(error="Clip file missing."), 404
+        body = request.get_json(silent=True)
+        limit = body.get("max_mb") if isinstance(body, dict) else None
+        if type(limit) is not int or limit not in _SHARE_LIMITS_MB:
+            return jsonify(error="Choose a 10 MB or 25 MB size limit."), 400
+        max_bytes = limit * 1_000_000
+
+        def export():
+            if source.stat().st_size <= max_bytes:
+                with source.open("rb") as clip:
+                    data = clip.read(max_bytes + 1)
+                if 0 < len(data) <= max_bytes:
+                    response = send_file(BytesIO(data), download_name=source.name,
+                                         as_attachment=True, mimetype=_VIDEO_MIME[source.suffix.lower()])
+                    response.headers["X-Aegis-Original"] = "1"
+                    return response
+            ffmpeg = media.resolve_ffmpeg(cfg.get("ffmpeg_path", ""))
+            if not ffmpeg:
+                return jsonify(error="FFmpeg is unavailable. You can download the original instead."), 503
+            with tempfile.TemporaryDirectory(prefix="aegis-share-") as scratch:
+                out = Path(scratch) / "share.mp4"
+                if not media.reencode_to_fit(ffmpeg, source, out, max_bytes):
+                    return jsonify(error="Could not fit this clip under the selected limit. Try a larger limit."), 422
+                data = out.read_bytes()
+            return send_file(BytesIO(data), download_name=f"{source.stem}-share.mp4",
+                             as_attachment=True, mimetype="video/mp4")
+
+        return run_media_job(export, share_export)
+
     # ───────── media streaming (range-enabled for seeking) ─────────
     @app.get("/clip/<clip_id>/video")
     @app.get("/clip/<clip_id>/download")
@@ -183,10 +224,9 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         if not c or not c.exists():
             return "not found", 404
         path = Path(c.path)
-        mime = {".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime"}
-        if not path.is_file() or path.suffix.lower() not in mime:
+        if not path.is_file() or path.suffix.lower() not in _VIDEO_MIME:
             return "not found", 404
-        return send_file(path, conditional=True, mimetype=mime[path.suffix.lower()],
+        return send_file(path, conditional=True, mimetype=_VIDEO_MIME[path.suffix.lower()],
                          as_attachment=request.path.endswith("/download"))
 
     @app.get("/clip/<clip_id>/thumb")
@@ -350,18 +390,18 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     # ───────── auto-update ─────────
     @app.get("/api/update/check")
     def api_update_check():
-        from . import update
-        info = update.check(cfg)
-        return jsonify(update=info.as_dict() if info else None,
-                       current=_version(), error=update.get_last_error())
+        result = release_checker.check(manual=request.args.get("manual") == "1")
+        return jsonify(update=result.info.as_dict() if result.info else None,
+                       current=_version(), error=result.error, retry_at=result.retry_at)
 
     @app.post("/api/update/apply")
     def api_update_apply():
-        from . import update
-        info = update.check(cfg)
-        if not info:
-            return jsonify(ok=False, detail="already up to date"), 400
-        return jsonify(update.start_apply(info))
+        result = release_checker.check()
+        if result.error:
+            return jsonify(ok=False, error=result.error, retry_at=result.retry_at), 503
+        if not result.info:
+            return jsonify(ok=False, detail="You're on the latest version."), 400
+        return jsonify(update.start_apply(result.info))
 
     @app.get("/api/update/progress")
     def api_update_progress():
@@ -381,6 +421,7 @@ _UI_SETTINGS = {
     "polish": {"enabled"},
     "obs": {"replay_dir", "port", "password"},
     "uploads": {
+        "automatic": bool,
         "telegram": {"enabled", "bot_token", "chat_id"},
         "discord": {"enabled", "webhook_url"},
         "youtube": {"enabled", "client_secrets", "privacy"},
@@ -389,6 +430,8 @@ _UI_SETTINGS = {
 
 
 def _valid_settings_patch(patch, allowed=_UI_SETTINGS):
+    if allowed is bool:
+        return type(patch) is bool
     if not isinstance(patch, dict) or any(key not in allowed for key in patch):
         return False
     if isinstance(allowed, set):
@@ -401,11 +444,17 @@ def _version() -> str:
 
 
 def _clip_json(c) -> dict:
+    path = Path(c.path)
+    try:
+        stats = path.stat()
+        size = stats.st_size if S_ISREG(stats.st_mode) else None
+    except OSError:
+        size = None
     return {
         "id": c.id, "title": c.title, "kills": c.kills, "map": c.map_name,
         "round": c.round_n, "side": c.side, "tags": c.tags, "favorite": c.favorite,
         "size_mb": c.size_mb, "duration": c.duration, "created": c.created,
-        "uploads": c.uploads, "missing": not c.exists(),
+        "size_bytes": size, "uploads": c.uploads, "missing": size is None,
     }
 
 

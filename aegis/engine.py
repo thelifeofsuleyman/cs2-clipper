@@ -329,7 +329,7 @@ class Engine:
             final = self._finalize_clip(produced, map_name, kills)
         clip = self._catalog_clip(final, kills, map_name, round_n, side)
         caption = format_caption(kills, map_name, round_n, side)
-        self.fan_out(clip, caption)
+        self.fan_out(clip, caption, automatic=True)
 
     def _finalize_clip(self, src: Path, map_name: str, kills: int) -> Path:
         """Move the clip to a unique name, preserving its container extension."""
@@ -375,7 +375,7 @@ class Engine:
         log(f"Cataloged clip {cid} ({clip.size_mb} MB)")
         return clip
 
-    def fan_out(self, clip: Clip, caption: str) -> dict[str, str]:
+    def fan_out(self, clip: Clip, caption: str, *, automatic: bool = False) -> dict[str, str]:
         """Send a clip to every enabled uploader; record per-target status."""
         path = Path(clip.path)
         results: dict[str, str] = {}
@@ -383,6 +383,8 @@ class Engine:
             if up.name == "gallery":
                 self.catalog.set_upload_status(clip.id, "gallery", "ok")
                 results["gallery"] = "ok"
+                continue
+            if automatic and not self.cfg.get("uploads.automatic", True):
                 continue
             log(f"Uploading {path.name} -> {up.name}: '{caption}'")
             res = up.send(path, caption)

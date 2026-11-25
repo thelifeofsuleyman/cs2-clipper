@@ -1,8 +1,32 @@
 import time
+from types import SimpleNamespace
 from pathlib import Path
 
-from aegis.clips import Catalog
+from aegis.clips import Catalog, Clip
 from aegis.engine import Engine, format_caption
+from aegis.uploaders.base import UploadResult
+
+
+def test_sharing_can_be_manual_only(cfg, data_dir, monkeypatch):
+    cfg.set("uploads.automatic", False)
+    catalog = Catalog()
+    path = data_dir / "clip.mp4"
+    path.touch()
+    clip = Clip(id="clip", path=str(path), created=1)
+    catalog.add(clip)
+    calls = []
+
+    def send(file, caption):
+        calls.append((file, caption))
+        return UploadResult(True)
+
+    monkeypatch.setattr("aegis.engine.uploaders.build_enabled",
+                        lambda _: [SimpleNamespace(name="gallery"), SimpleNamespace(name="telegram", send=send)])
+    engine = Engine(cfg, catalog)
+    assert engine.fan_out(clip, "Clip", automatic=True) == {"gallery": "ok"}
+    assert not calls
+    assert engine.fan_out(clip, "Clip") == {"gallery": "ok", "telegram": "ok"}
+    assert calls == [(path, "Clip")]
 
 
 def _gsi(kills, kmap="de_dust2", rnd=1, team="T"):

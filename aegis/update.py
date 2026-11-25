@@ -19,6 +19,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +52,37 @@ class UpdateInfo:
                 "asset_url": self.asset_url, "html_url": self.html_url}
 
 
+@dataclass(frozen=True)
+class ReleaseCheck:
+    info: UpdateInfo | None = None
+    error: str = ""
+    retry_at: int | None = None
+
+
+class ReleaseChecker:
+    """Share one release lookup across dashboard loads and install clicks."""
+
+    def __init__(self, cfg: Config):
+        self._cfg = cfg
+        self._lock = threading.Lock()
+        self._result: ReleaseCheck | None = None
+        self._completed = 0.0
+
+    def check(self, *, manual: bool = False) -> ReleaseCheck:
+        with self._lock:
+            if self._result is not None:
+                if self._result.retry_at is not None:
+                    if time.time() < self._result.retry_at:
+                        return self._result
+                else:
+                    lifetime = 30 if manual or self._result.error else 300
+                    if time.monotonic() - self._completed < lifetime:
+                        return self._result
+            self._result = _fetch_release(self._cfg)
+            self._completed = time.monotonic()
+            return self._result
+
+
 def _parse(v: str) -> tuple:
     """'v2.10.1' -> (2, 10, 1); non-numeric parts drop to 0 so compares are total."""
     nums = re.findall(r"\d+", v or "")
@@ -70,35 +102,37 @@ def get_last_error() -> str:
 
 
 def check(cfg: Config) -> UpdateInfo | None:
-    """Return UpdateInfo if a newer release exists, else None. Never raises.
-    Records a human reason in get_last_error() when a check can't complete."""
+    """One-shot release lookup for callers outside the dashboard."""
     global _last_error
-    _last_error = ""
+    result = _fetch_release(cfg)
+    _last_error = result.error
+    return result.info
+
+
+def _fetch_release(cfg: Config) -> ReleaseCheck:
     repo = cfg.get("update.repo", "")
     if repo != _REPO:
-        _last_error = "automatic updates require the official release repository"
-        return None
+        return ReleaseCheck(error="Automatic updates require the official release repository.")
     try:
         r = requests.get(_API, timeout=8, allow_redirects=False,
                          headers={"Accept": "application/vnd.github+json"})
-        if r.status_code == 403 and "rate limit" in (r.text or "").lower():
-            _last_error = "GitHub rate limit reached — try again in a few minutes"
-            return None
+        if r.status_code in (403, 429) and (r.status_code == 429
+                or r.headers.get("X-RateLimit-Remaining") == "0"
+                or r.headers.get("Retry-After")
+                or "rate limit" in (r.text or "").lower()):
+            return ReleaseCheck(error="GitHub rate limit reached.", retry_at=_rate_limit_reset(r.headers))
         if r.status_code != 200:
-            _last_error = f"GitHub returned HTTP {r.status_code}"
-            return None
+            return ReleaseCheck(error=f"GitHub returned HTTP {r.status_code}.")
         data = r.json()
-    except Exception as e:
-        _last_error = "couldn't reach GitHub"
+    except (requests.RequestException, ValueError) as e:
         log(f"Update check failed: {e}")
-        return None
+        return ReleaseCheck(error="Could not reach GitHub.")
 
     if not isinstance(data, dict) or not isinstance(data.get("assets"), list):
-        _last_error = "unexpected release metadata"
-        return None
+        return ReleaseCheck(error="Unexpected release metadata.")
     tag = data.get("tag_name", "")
     if not isinstance(tag, str) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) or not is_newer(tag):
-        return None
+        return ReleaseCheck()
 
     expected_url = f"{_RELEASES}/download/{tag}/{_INSTALLER}"
     asset = next((a for a in data["assets"] if isinstance(a, dict) and a.get("name") == _INSTALLER
@@ -109,14 +143,27 @@ def check(cfg: Config) -> UpdateInfo | None:
                          and type(size) is int and 0 < size <= _MAX_INSTALLER_BYTES)
     info = UpdateInfo(
         version=tag.lstrip("v"),
-        notes=(data.get("body") or "").strip()[:4000],
+        notes=body.strip()[:4000] if isinstance(body := data.get("body"), str) else "",
         asset_url=expected_url if verified_metadata else "",
         html_url=f"{_RELEASES}/tag/{tag}",
         digest=digest if verified_metadata else "",
         size=size if verified_metadata else 0,
     )
     log(f"Update available: {info.version}")
-    return info
+    return ReleaseCheck(info=info)
+
+
+def _rate_limit_reset(headers) -> int:
+    now = int(time.time())
+    retry = headers.get("Retry-After", "")
+    reset = headers.get("X-RateLimit-Reset", "")
+    deadlines = []
+    if re.fullmatch(r"[0-9]{1,8}", retry) and int(retry) > 0:
+        deadlines.append(now + int(retry))
+    if headers.get("X-RateLimit-Remaining") == "0" and re.fullmatch(r"[0-9]{1,12}", reset):
+        if int(reset) > now:
+            deadlines.append(int(reset))
+    return max(deadlines, default=now + 60)
 
 
 # Live progress so the UI can show a bar during the (multi-minute) download.

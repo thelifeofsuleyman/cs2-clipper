@@ -50,10 +50,11 @@ def resolve_ffmpeg(override: str = "") -> str | None:
     return shutil.which("ffmpeg")
 
 
-def _run(args: list[str], timeout: float = 120) -> subprocess.CompletedProcess:
+def _run(args: list[str], timeout: float = 120, *, background: bool = False) -> subprocess.CompletedProcess:
+    priority = subprocess.BELOW_NORMAL_PRIORITY_CLASS if background and sys.platform == "win32" else 0
     return subprocess.run(
         args, capture_output=True, text=True, errors="replace", timeout=timeout,
-        creationflags=_NO_WINDOW,
+        creationflags=_NO_WINDOW | priority,
     )
 
 
@@ -220,27 +221,42 @@ def make_thumbnail(ffmpeg: str | None, video: Path, clip_id: str) -> Path | None
     return out if (r.returncode == 0 and out.exists()) else None
 
 
-def reencode_to_fit(ffmpeg: str | None, video: Path, max_mb: float) -> Path | None:
-    """Re-encode ``video`` to land under ``max_mb`` (for Discord's 25 MB cap).
-
-    Targets a bitrate from duration and the size budget, leaving ~10% headroom
-    for the audio/container. Returns a temp file path, or None if it can't.
-    """
+def reencode_to_fit(ffmpeg: str | None, video: Path, out: Path, max_bytes: int) -> bool:
+    """Make a shareable MP4 within a byte cap. The caller owns the scratch directory."""
     if not ffmpeg:
-        return None
-    dur = probe_duration(ffmpeg, video) or 30.0
-    target_bits = max_mb * 8 * 1024 * 1024 * 0.9
-    v_kbps = max(int(target_bits / dur / 1000) - 128, 300)  # reserve 128k audio
-    out = video.with_name(f"{video.stem}__fit{int(max_mb)}mb.mp4")
-    log(f"Re-encoding {video.name} to ~{max_mb} MB ({v_kbps}k video)")
-    r = _run([ffmpeg, "-y", "-i", str(video),
-              "-c:v", "libx264", "-b:v", f"{v_kbps}k",
-              "-preset", "veryfast", "-c:a", "aac", "-b:a", "128k",
-              "-movflags", "+faststart", str(out)])
-    if r.returncode == 0 and out.exists() and out.stat().st_size <= max_mb * 1024 * 1024:
-        return out
-    log(f"Re-encode did not fit the size budget for {video.name}")
-    return out if (r.returncode == 0 and out.exists()) else None
+        return False
+    duration, audio = stream_info(ffmpeg, video)
+    if duration <= 0:
+        return False
+    audio_kbps = 128 if audio else 0
+    budget_kbps = max_bytes * 8 / duration / 1000
+    for headroom in (0.90, 0.76):
+        video_kbps = int(budget_kbps * headroom) - audio_kbps
+        if video_kbps < 150:
+            return False
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+               "-protocol_whitelist", "file,pipe", "-threads", "2", "-i", str(video),
+               "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-map_chapters", "-1",
+               "-filter_threads", "1"]
+        if video_kbps < 2200:
+            # Preserve aspect ratio and never upscale a small source.
+            cmd += ["-vf", "scale=w='min(iw,1280)':h='min(ih,720)':"
+                    "force_original_aspect_ratio=decrease:force_divisible_by=2"]
+        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                "-threads", "2", "-b:v", f"{video_kbps}k", "-maxrate", f"{video_kbps}k",
+                "-bufsize", f"{video_kbps * 2}k", "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+                "-movflags", "+faststart", str(out)]
+        try:
+            result = _run(cmd, timeout=110, background=True)
+            if result.returncode != 0:
+                log(f"Could not encode a share copy: {result.stderr[-200:]}")
+                return False
+            if out.is_file() and 0 < out.stat().st_size <= max_bytes:
+                return True
+        except (OSError, subprocess.SubprocessError) as exc:
+            log(f"Could not encode a share copy: {exc}")
+            return False
+    return False
 
 
 def build_montage(

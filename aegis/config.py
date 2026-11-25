@@ -58,6 +58,7 @@ DEFAULTS: dict[str, Any] = {
         "replay_dir": "",        # OBS Settings -> Output -> Recording Path
     },
     "uploads": {
+        "automatic": True,       # match existing automatic-highlight delivery
         "gallery":  {"enabled": True},   # always keep a local copy + catalog entry
         "telegram": {"enabled": False, "bot_token": "", "chat_id": ""},
         "discord":  {"enabled": False, "webhook_url": "", "max_mb": 25},
