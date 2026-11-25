@@ -161,6 +161,10 @@ class ProcessAudioBuffer(AudioBuffer):
                 return
             self.ready.set()
             self.buffered.set()
+            # WASAPI uses QPC. Python 3.12's Windows monotonic clock advances in
+            # coarse steps, so use one conversion for the entire stream.
+            offset = time.monotonic() - time.perf_counter()
+            previous_end = None
             while header := pipe.read(self._header.size):
                 stamp, size = self._header.unpack(header)
                 if not 0 < size <= self._rate * 4 or size % 4:
@@ -168,9 +172,15 @@ class ProcessAudioBuffer(AudioBuffer):
                 data = pipe.read(size)
                 if len(data) != size:
                     break
-                now = time.monotonic()
-                age = time.perf_counter() - stamp / 10_000_000 if stamp else -1
-                self._append(now - (age if 0 <= age <= 2 else size / (4 * self._rate)), data, now)
+                duration = size / (4 * self._rate)
+                now = time.perf_counter() + offset
+                start = stamp / 10_000_000 + offset
+                if not stamp or not -0.05 <= now - start <= 2:
+                    start = now - duration
+                if previous_end is not None and abs(start - previous_end) < 0.001:
+                    start = previous_end
+                self._append(start, data, now)
+                previous_end = start + duration
         except (OSError, ValueError, struct.error) as exc:
             self.detail = "CS2-only audio capture was interrupted."
             log(f"{self.detail} {exc}")
