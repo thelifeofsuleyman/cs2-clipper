@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from . import paths
@@ -50,8 +51,36 @@ def resolve_ffmpeg(override: str = "") -> str | None:
     return shutil.which("ffmpeg")
 
 
-def _run(args: list[str], timeout: float = 120, *, background: bool = False) -> subprocess.CompletedProcess:
+class ExportPaused(Exception):
+    """The match started before a background export finished."""
+
+
+def _run(args: list[str], timeout: float = 120, *, background: bool = False, pause=None) -> subprocess.CompletedProcess:
     priority = subprocess.BELOW_NORMAL_PRIORITY_CLASS if background and sys.platform == "win32" else 0
+    if pause is not None:
+        if pause():
+            raise ExportPaused
+        with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                              errors="replace", creationflags=_NO_WINDOW | priority) as process:
+            from . import winjob
+            winjob.guard(process)
+            deadline = time.monotonic() + timeout
+            try:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(args, timeout)
+                    if pause():
+                        raise ExportPaused
+                    try:
+                        stdout, stderr = process.communicate(timeout=min(0.75, remaining))
+                        return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+                    except subprocess.TimeoutExpired:
+                        continue
+            except BaseException:
+                process.kill()
+                process.communicate()
+                raise
     return subprocess.run(
         args, capture_output=True, text=True, errors="replace", timeout=timeout,
         creationflags=_NO_WINDOW | priority,
@@ -197,7 +226,7 @@ def make_test_clip(ffmpeg: str | None, out_path: Path, seconds: int = 5) -> Path
 def _capture_once(ffmpeg: str, out_path: Path, seconds: int, cfg, method: str, encoder: str) -> bool:
     from . import recorder
     w, h, fps, bitrate = recorder.capture_options(cfg, encoder)
-    performance = bool(cfg.get("recording.prioritize_game_fps", True))
+    performance = cfg.game_fps_priority()
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
     cmd += recorder.capture_video_args(w, h, fps, encoder, bitrate, method, performance,
                                        bool(cfg.get("recording.compact_video")))
@@ -244,7 +273,7 @@ def make_thumbnail(ffmpeg: str | None, video: Path, clip_id: str) -> Path | None
     return out if (r.returncode == 0 and out.exists()) else None
 
 
-def reencode_to_fit(ffmpeg: str | None, video: Path, out: Path, max_bytes: int) -> bool:
+def reencode_to_fit(ffmpeg: str | None, video: Path, out: Path, max_bytes: int, *, pause=None) -> bool:
     """Make a shareable MP4 within a byte cap. The caller owns the scratch directory."""
     if not ffmpeg:
         return False
@@ -270,7 +299,8 @@ def reencode_to_fit(ffmpeg: str | None, video: Path, out: Path, max_bytes: int) 
                 "-bufsize", f"{video_kbps * 2}k", "-c:a", "aac", "-b:a", "128k", "-ac", "2",
                 "-movflags", "+faststart", str(out)]
         try:
-            result = _run(cmd, timeout=110, background=True)
+            kwargs = {"pause": pause} if pause is not None else {}
+            result = _run(cmd, timeout=110, background=True, **kwargs)
             if result.returncode != 0:
                 log(f"Could not encode a share copy: {result.stderr[-200:]}")
                 return False

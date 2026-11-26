@@ -48,16 +48,25 @@ Open a video and click a kill marker to jump to the action. Choose **Trim clip**
 to set the start and end around it, preview the selection, and save a separate
 video. Open **Matches** to review and share clips by match, map, and round.
 Markers and match recaps appear on new clips with CS2 game updates.
+Under **Settings → Highlights**, choose Standard, Competitive, or Custom footage
+around each kill. Built-in capture joins complete segments and can retain a
+little extra footage at each cut.
 When capture is set to run only with CS2, Aegis keeps the last completed replay
 segments available for 30 seconds after the game closes.
 
 In **Share**, download the original or prepare a local MP4 copy for a 10 MB or
 25 MB limit. Downloading a smaller copy keeps the original in your library.
+In **Matches**, select up to 12 clips and queue exports with a limit per clip.
+The queue prepares copies after the match and waits if a new match starts.
+With CS2 open and game updates unavailable, queued exports wait for CS2 to close.
 In **Settings → Sharing**, turn off **Send automatic highlights** to keep
 connected destinations available for manual sharing only.
 
 **Compact recording** in Recording settings reduces bitrate for future built-in captures while keeping
 their resolution and frame rate. The exact file size and detail depend on the scene.
+Choose **Direct GPU only** in **Settings → Recording → Advanced capture quality**
+to use desktop-resolution capture through a compatible NVENC or AMF encoder
+at up to 30 FPS. If direct capture is unavailable, the dashboard reports the error.
 
 In **Settings → Recording**, select **CS2 only** to capture game audio on Windows
 11. Choose **Desktop audio** to capture sounds from the default playback device.
@@ -76,6 +85,10 @@ To report recording issues, use **Activity → Copy recorder diagnostics**. The
 report includes the capture mode, FPS target, and replay save outcomes for the
 current session. It stays local until you share it and contains no account
 details or file paths.
+
+In **Activity → App health counts**, opt in to collect recorder start times,
+replay save counts, and built-in capture frame counts on this PC. The panel shows
+latest-release downloads from GitHub and lets you copy the counts to share them.
 
 Existing installs can use **Check for updates** in the dashboard. The installer
 is currently unsigned, so Windows may display a publisher warning.

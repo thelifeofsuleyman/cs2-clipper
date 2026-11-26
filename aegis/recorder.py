@@ -42,6 +42,7 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 # Quality presets -> (width, height, fps, video bitrate). "source" keeps native size.
 PRESETS: dict[str, tuple] = {
+    "gpu_only": (0, 0, 30, "8M"),
     "low":    (1280, 720, 30, "6M"),    # low-end friendly
     "medium": (1600, 900, 30, "10M"),
     "high":   (1920, 1080, 60, "16M"),
@@ -87,8 +88,10 @@ def capture_candidates(ffmpeg: str, cfg: Config) -> list[tuple[str, str]]:
         choices.append("libx264")
     method = cfg.get("recording.capture", "ddagrab")
     methods = ("gdigrab", "ddagrab") if method == "gdigrab" else ("ddagrab", "gdigrab")
-    prefer_direct = (cfg.get("recording.prioritize_game_fps", True)
-                     or cfg.get("recording.preset") == "source")
+    preset = cfg.get("recording.preset")
+    if preset == "gpu_only":
+        return [("ddagrab-d3d11", encoder) for encoder in choices if encoder in _D3D11_ENCODERS]
+    prefer_direct = cfg.game_fps_priority() or preset == "source"
     candidates = []
     for method in methods:
         if method == "ddagrab" and prefer_direct:
@@ -128,7 +131,7 @@ def capture_options(cfg: Config, encoder: str) -> tuple[int, int, int, str]:
     preset = cfg.get("recording.preset", "medium")
     w, h, fps, bitrate = PRESETS.get(preset, PRESETS["medium"])
     fps = int(cfg.get("recording.fps", fps) or fps)
-    if cfg.get("recording.prioritize_game_fps", True):
+    if cfg.game_fps_priority():
         fps = min(fps, 30)
         if encoder == "libx264":
             w, h, _, bitrate = PRESETS["low"]
@@ -217,10 +220,11 @@ def pick_segments(entries: list[tuple[Path, float]], clip_seconds: float,
     return [p for p, _ in chosen]
 
 
-def highlight_ranges(kills: list[float]) -> list[tuple[float, float]]:
+def highlight_ranges(kills: list[float], before: float = HIGHLIGHT_LEAD,
+                     after: float = HIGHLIGHT_TAIL) -> list[tuple[float, float]]:
     ranges: list[tuple[float, float]] = []
     for kill in kills:
-        start, end = kill - HIGHLIGHT_LEAD, kill + HIGHLIGHT_TAIL
+        start, end = kill - before, kill + after
         if ranges and start <= ranges[-1][1]:
             ranges[-1] = (ranges[-1][0], end)
         else:
@@ -229,11 +233,11 @@ def highlight_ranges(kills: list[float]) -> list[tuple[float, float]]:
 
 
 def highlight_segments(entries: list[tuple[Path, float]], ranges: list[tuple[float, float]],
-                       segment_time: float) -> list[Path]:
+                       segment_time: float, after: float = HIGHLIGHT_TAIL) -> list[Path]:
     complete = sorted(entries, key=lambda entry: entry[1])[:-1]
     if not complete or not ranges or complete[-1][1] < ranges[-1][1] - 0.25:
         return []
-    last_kill = ranges[-1][1] - HIGHLIGHT_TAIL
+    last_kill = ranges[-1][1] - after
     if last_kill < complete[0][1] - segment_time:
         return []
     # Segment timestamps come from file writes. Ignore a tiny boundary overlap
@@ -259,17 +263,19 @@ class Recorder(ABC):
     def status(self) -> dict: ...
 
 
-def make_recorder(cfg: Config) -> Recorder:
+def make_recorder(cfg: Config, health=None) -> Recorder:
     backend = cfg.get("recording.backend", "builtin")
     if backend == "obs":
         return ObsRecorder(cfg)
-    return BuiltinRecorder(cfg)
+    return BuiltinRecorder(cfg, health)
 
 
 # ───────── built-in ffmpeg recorder ─────────
 class BuiltinRecorder(Recorder):
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, health=None):
         self.cfg = cfg
+        self._health = health
+        self._capture_started = None
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
         self._snapshot_lock = threading.Lock()
@@ -374,6 +380,11 @@ class BuiltinRecorder(Recorder):
                             continue
                         if not choices:
                             choices = capture_candidates(ffmpeg, self.cfg)
+                            if not choices:
+                                self._stage = "error"
+                                self._detail = "Direct GPU capture needs an available NVENC or AMF encoder. Choose another quality preset to allow fallback."
+                                self._stop.wait(12)
+                                continue
                         if next_choice >= len(choices):
                             next_choice = 0
                             self._stage = "error"
@@ -423,6 +434,9 @@ class BuiltinRecorder(Recorder):
         if self._stage == "starting" and len(files) > 1:
             self._stage = "ready"
             self._detail = ""
+            if self._capture_started is not None:
+                self._health.add(capture_ready=1, capture_start_ms=round((now - self._capture_started) * 1000))
+                self._capture_started = None
             log(f"Replay buffer ready ({self._method}, {self._encoder})")
         return ""
 
@@ -445,7 +459,7 @@ class BuiltinRecorder(Recorder):
         self._discard_segments()
 
         w, h, fps, bitrate = capture_options(self.cfg, encoder)
-        performance = bool(self.cfg.get("recording.prioritize_game_fps", True))
+        performance = self.cfg.game_fps_priority()
         buffer_secs = max(int(self.cfg.get("recording.buffer_seconds", 45)),
                           HIGHLIGHT_HISTORY,
                           math.ceil(float(self.cfg.get("recording.clip_seconds", 30))),
@@ -463,18 +477,28 @@ class BuiltinRecorder(Recorder):
         self._fps = fps
         self._stage = "starting"
         self._last_segment_write = 0
+        track = self._health is not None and self._health.enabled
+        self._capture_started = time.monotonic() if track else None
+        if self._capture_started is not None:
+            self._health.add(capture_attempts=1)
+        if track:
+            cmd[1:1] = ["-nostats", "-progress", "pipe:1", "-stats_period", "2"]
         log(f"Built-in recorder starting ({method}, {encoder}, {fps}fps)")
         stderr = None
         try:
             stderr = tempfile.TemporaryFile()
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=stderr, creationflags=_NO_WINDOW,
+                cmd, stdout=subprocess.PIPE if track else subprocess.DEVNULL,
+                stderr=stderr, creationflags=_NO_WINDOW,
             )
         except (OSError, ValueError) as e:
             if stderr:
                 stderr.close()
             self._capture_failed(str(e))
             return
+
+        if track:
+            threading.Thread(target=self._track_progress, args=(proc.stdout,), daemon=True).start()
 
         from . import winjob
         winjob.guard(proc)
@@ -499,6 +523,30 @@ class BuiltinRecorder(Recorder):
             stderr.close()
             if speaker:
                 speaker.stop()
+
+    def _track_progress(self, stream) -> None:
+        counters = {}
+        previous = (0, 0) if self._health.enabled else None
+        with stream:
+            for line in stream:
+                key, _, raw = line.strip().partition(b"=")
+                if key in (b"frame", b"drop_frames"):
+                    try:
+                        counters[key] = int(raw)
+                    except ValueError:
+                        continue
+                elif key == b"progress":
+                    if self._health.enabled:
+                        if all(key in counters for key in (b"frame", b"drop_frames")):
+                            current = counters[b"frame"], counters[b"drop_frames"]
+                            if previous is not None:
+                                self._health.add(frames_output=current[0] - previous[0],
+                                                 frames_dropped=current[1] - previous[1])
+                            previous = current
+                    else:
+                        previous = None
+                    counters.clear()
+        self._health.flush()
 
     def _capture_failed(self, reason: str) -> None:
         with self._lock:
@@ -606,7 +654,7 @@ class BuiltinRecorder(Recorder):
                         self._save_error = "The replay buffer is still warming up."
                         return None
                     segs = (pick_segments(entries, seconds, seg_time) if ranges is None
-                            else highlight_segments(entries, ranges, seg_time))
+                            else highlight_segments(entries, ranges, seg_time, self.cfg.highlight_padding()[1]))
                     if not segs:
                         return None
                     for i, segment in enumerate(segs):

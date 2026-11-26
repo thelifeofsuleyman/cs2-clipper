@@ -28,17 +28,21 @@ DEFAULTS: dict[str, Any] = {
     "first_run": True,
     "storage": {"clips_dir": ""},
     "hotkeys": {"replay": ""},
+    "metrics": {"enabled": False},
     "engine": {
         "debounce_sec": 7.0,     # seconds of no-kill before a streak is clipped
         "min_kills": 1,          # 2 = skip solo kills
         "highlight_modes": "no_deathmatch",
+        "highlight_window": "standard",
+        "highlight_before": 2.0,
+        "highlight_after": 1.0,
         "clip_wait_sec": 8.0,    # how long to wait for OBS to finish writing
         "gsi_port": 3000,        # CS2 GSI POST target (matches the .cfg)
         "cs2_cfg_dir": "",       # optional override for custom Steam installs
     },
     "recording": {
         "backend": "builtin",          # "builtin" (no OBS) | "obs"
-        "preset": "medium",            # low | medium | high | source  (see recorder.PRESETS)
+        "preset": "medium",            # see recorder.PRESETS
         "fps": 0,                      # 0 = use the preset's fps
         "encoder": "auto",             # auto | nvenc | amf | qsv | x264
         "capture": "ddagrab",          # ddagrab (fullscreen-safe) | gdigrab
@@ -131,6 +135,21 @@ class Config:
         if source in ("off", "desktop", "cs2"):
             return source
         return "desktop" if not source and self.get("recording.speaker_audio") is True else "off"
+
+    def highlight_padding(self) -> tuple[float, float]:
+        mode = self.get("engine.highlight_window")
+        if mode == "competitive":
+            return 1.0, 0.75
+        if mode == "custom":
+            before = self.get("engine.highlight_before")
+            after = self.get("engine.highlight_after")
+            if (type(before) in (int, float) and 0.5 <= before <= 10
+                    and type(after) in (int, float) and 0.5 <= after <= 10):
+                return float(before), float(after)
+        return 2.0, 1.0
+
+    def game_fps_priority(self) -> bool:
+        return bool(self.get("recording.prioritize_game_fps", True)) or self.get("recording.preset") == "gpu_only"
 
     def save(self) -> None:
         with self._lock:

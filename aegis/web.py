@@ -21,6 +21,7 @@ from stat import S_ISREG
 from flask import Flask, Response, abort, g, jsonify, redirect, request, send_file
 
 from . import __version__, config, media, paths, update
+from .batch_exports import BatchExports, LIMITS_MB, MAX_CLIPS
 from .config import Config
 from .clips import Catalog
 from .engine import Engine, format_caption
@@ -28,7 +29,6 @@ from .log import log, recent
 from .pages import DASHBOARD_HTML, SETUP_HTML
 
 _VIDEO_MIME = {".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime"}
-_SHARE_LIMITS_MB = {10, 25}
 
 
 def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
@@ -38,6 +38,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     media_job = threading.Lock()
     clip_edit = threading.Lock()
     release_checker = update.ReleaseChecker(cfg)
+    exports = BatchExports(cfg, catalog, engine.can_batch_export, clip_edit)
 
     @app.before_request
     def check_local_request():
@@ -100,7 +101,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     def dashboard():
         if cfg.get("first_run"):
             return redirect("/setup")
-        return render_page(DASHBOARD_HTML.replace("%VER%", __version__)
+        return render_page(DASHBOARD_HTML.replace("%VER%", __version__).replace("%MAX_EXPORT_CLIPS%", str(MAX_CLIPS))
                            .replace("%AUTO_UPDATE%", "true" if cfg.get("update.auto_check") else "false"))
 
     @app.get("/setup")
@@ -123,9 +124,22 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
                      if key in recorder_status},
             buffer_ready=status["replay_available"],
             game_updates_connected=status["gsi_connected"],
-            prioritize_game_fps=bool(cfg.get("recording.prioritize_game_fps", True)),
+            prioritize_game_fps=cfg.game_fps_priority(),
             this_session=engine.replay_metrics(),
         )
+
+    @app.get("/api/app-health")
+    def api_app_health():
+        enabled = engine.health.enabled
+        downloads = release_checker.cached_downloads()
+        error = ""
+        if enabled and request.args.get("downloads") == "1":
+            result = release_checker.check(manual=True)
+            downloads, error = result.downloads, result.error
+        counts = engine.health.snapshot()
+        if enabled and downloads is not None:
+            counts["latest_release_downloads"] = downloads
+        return jsonify(enabled=enabled, counts=counts, download_error=error)
 
     @app.post("/api/quit")
     def api_quit():
@@ -191,7 +205,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
             return jsonify(error="Clip file missing."), 404
         body = request.get_json(silent=True)
         limit = body.get("max_mb") if isinstance(body, dict) else None
-        if type(limit) is not int or limit not in _SHARE_LIMITS_MB:
+        if type(limit) is not int or limit not in LIMITS_MB:
             return jsonify(error="Choose a 10 MB or 25 MB size limit."), 400
         max_bytes = limit * 1_000_000
 
@@ -216,6 +230,48 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
                              as_attachment=True, mimetype="video/mp4")
 
         return run_media_job(export, clip_edit)
+
+    @app.get("/api/batch-exports")
+    def api_batch_exports():
+        return jsonify(jobs=exports.list())
+
+    @app.post("/api/batch-exports")
+    def api_queue_exports():
+        body = request.get_json(silent=True)
+        clip_ids = body.get("clip_ids") if isinstance(body, dict) else None
+        limit = body.get("max_mb") if isinstance(body, dict) else None
+        if (not isinstance(clip_ids, list) or not 1 <= len(clip_ids) <= MAX_CLIPS
+                or any(not isinstance(clip_id, str) or len(clip_id) > 128 for clip_id in clip_ids)):
+            return jsonify(error=f"Choose up to {MAX_CLIPS} match clips."), 400
+        if type(limit) is not int or limit not in LIMITS_MB:
+            return jsonify(error="Choose a 10 MB or 25 MB limit per clip."), 400
+        try:
+            job = exports.add(list(dict.fromkeys(clip_ids)), limit)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except OSError:
+            return jsonify(error="Could not write to the export folder."), 503
+        return jsonify(job=job), 202
+
+    @app.delete("/api/batch-exports/<job_id>")
+    def api_remove_batch(job_id: str):
+        try:
+            if exports.remove(job_id):
+                return jsonify(ok=True)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
+        except OSError:
+            return jsonify(error="Could not remove the local export copies."), 503
+        return jsonify(error="Batch not found."), 404
+
+    @app.get("/exports/<job_id>/<int:index>")
+    def download_batch_clip(job_id: str, index: int):
+        found = exports.download(job_id, index)
+        if found and found[0].is_file():
+            source, name = found
+            return send_file(source, download_name=name, as_attachment=True,
+                             mimetype=_VIDEO_MIME[source.suffix], conditional=True)
+        return "not found", 404
 
     @app.post("/api/clips/<clip_id>/trim")
     def api_trim_clip(clip_id: str):
@@ -307,6 +363,12 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
             return jsonify(error="Provide settings as a JSON object with settings groups."), 400
         if patch.get("engine", {}).get("highlight_modes", "all") not in ("off", "all", "no_deathmatch", "competitive"):
             return jsonify(error="Choose a supported automatic highlight mode."), 400
+        highlights = patch.get("engine", {})
+        if highlights.get("highlight_window", "standard") not in ("standard", "competitive", "custom"):
+            return jsonify(error="Choose a supported highlight timing preset."), 400
+        for key in ("highlight_before", "highlight_after"):
+            if key in highlights and (type(highlights[key]) not in (int, float) or not 0.5 <= highlights[key] <= 10):
+                return jsonify(error="Choose 0.5 to 10 seconds around each kill."), 400
         if patch.get("recording", {}).get("audio_source", "off") not in ("off", "desktop", "cs2"):
             return jsonify(error="Choose a supported recording audio source."), 400
         if "replay" in patch.get("hotkeys", {}):
@@ -335,6 +397,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         before = cfg.as_dict()
         cfg.update(patch)
         cfg.save()
+        if "metrics" in patch:
+            engine.health.flush()
         recording = cfg.get("recording")
         backend_changed = before["recording"] != recording
         if recording["backend"] == "obs":
@@ -441,8 +505,10 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 # ───────── helpers ─────────
 _UI_SETTINGS = {
     "storage": {"clips_dir"},
+    "metrics": {"enabled": bool},
     "hotkeys": {"replay"},
-    "engine": {"debounce_sec", "min_kills", "highlight_modes", "cs2_cfg_dir"},
+    "engine": {"debounce_sec", "min_kills", "highlight_modes", "cs2_cfg_dir",
+               "highlight_window", "highlight_before", "highlight_after"},
     "recording": {"backend", "preset", "prioritize_game_fps", "speaker_audio", "audio_source", "compact_video",
                   "clip_seconds", "only_when_game_running"},
     "polish": {"enabled"},

@@ -35,6 +35,7 @@ _REPO = "thelifeofsuleyman/cs2-clipper"
 _RELEASES = f"https://github.com/{_REPO}/releases"
 _API = f"https://api.github.com/repos/{_REPO}/releases/latest"
 _INSTALLER = "AegisClipper-Setup.exe"
+_PORTABLE = "AegisClipper-portable.zip"
 _MAX_INSTALLER_BYTES = 512 * 1024 * 1024
 
 
@@ -57,6 +58,7 @@ class ReleaseCheck:
     info: UpdateInfo | None = None
     error: str = ""
     retry_at: int | None = None
+    downloads: int | None = None
 
 
 class ReleaseChecker:
@@ -81,6 +83,9 @@ class ReleaseChecker:
             self._result = _fetch_release(self._cfg)
             self._completed = time.monotonic()
             return self._result
+
+    def cached_downloads(self) -> int | None:
+        return self._result.downloads if self._result is not None else None
 
 
 def _parse(v: str) -> tuple:
@@ -131,8 +136,15 @@ def _fetch_release(cfg: Config) -> ReleaseCheck:
     if not isinstance(data, dict) or not isinstance(data.get("assets"), list):
         return ReleaseCheck(error="Unexpected release metadata.")
     tag = data.get("tag_name", "")
-    if not isinstance(tag, str) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) or not is_newer(tag):
+    if not isinstance(tag, str) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
         return ReleaseCheck()
+    counts = {a["name"]: a["download_count"] for a in data["assets"] if isinstance(a, dict)
+              and a.get("name") in (_INSTALLER, _PORTABLE)
+              and a.get("browser_download_url") == f"{_RELEASES}/download/{tag}/{a['name']}"
+              and type(a.get("download_count")) is int and a["download_count"] >= 0}
+    downloads = sum(counts.values()) if counts else None
+    if not is_newer(tag):
+        return ReleaseCheck(downloads=downloads)
 
     expected_url = f"{_RELEASES}/download/{tag}/{_INSTALLER}"
     asset = next((a for a in data["assets"] if isinstance(a, dict) and a.get("name") == _INSTALLER
@@ -150,7 +162,7 @@ def _fetch_release(cfg: Config) -> ReleaseCheck:
         size=size if verified_metadata else 0,
     )
     log(f"Update available: {info.version}")
-    return ReleaseCheck(info=info)
+    return ReleaseCheck(info=info, downloads=downloads)
 
 
 def _rate_limit_reset(headers) -> int:

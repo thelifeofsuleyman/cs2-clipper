@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -28,6 +29,7 @@ from pathlib import Path
 from . import media, paths, polish, uploaders
 from .clips import Catalog, Clip
 from .config import Config
+from .health import HealthMetrics
 from .log import log
 from .recorder import HIGHLIGHT_HISTORY, highlight_ranges, make_recorder
 from .storage import StorageStatus
@@ -71,7 +73,8 @@ class Engine:
     def __init__(self, cfg: Config, catalog: Catalog):
         self.cfg = cfg
         self.catalog = catalog
-        self.recorder = make_recorder(cfg)
+        self.health = HealthMetrics(cfg)
+        self.recorder = make_recorder(cfg, self.health)
         self.replay_hotkey_state = "off"
         self.replay_receipt = None
         self.notify_replay = None
@@ -94,6 +97,8 @@ class Engine:
         self._match_observed_at = 0.0
         self._last_round: int | None = None
         self._last_phase = ""
+        self._game_phase = ""
+        self._game_phase_at = 0.0
         self._last_player = ""
         self._last_map = ""
         self._last_mode = ""
@@ -120,6 +125,13 @@ class Engine:
         with self._lock:
             if provider or player:
                 self._last_gsi = time.monotonic()
+                phase = map_obj.get("phase")
+                if phase in ("warmup", "live", "halftime", "gameover", "intermission"):
+                    self._game_phase = phase
+                    self._game_phase_at = self._last_gsi
+                elif not map_obj and player.get("activity") == "menu":
+                    self._game_phase = "menu"
+                    self._game_phase_at = self._last_gsi
 
         owner = str(provider.get("steamid") or "")
         observed = str(player.get("steamid") or "")
@@ -215,6 +227,8 @@ class Engine:
         token = self._timer_token = object()
         if delay is None:
             delay = float(self.cfg.get("engine.debounce_sec"))
+            if self.cfg.get("recording.backend") == "obs" or self.cfg.get("engine.highlight_window") == "custom":
+                delay = max(delay, self.cfg.highlight_padding()[1])
         t = threading.Timer(delay, lambda: self._save_clip(token))
         t.daemon = True
         self._timer = t
@@ -236,6 +250,7 @@ class Engine:
     def stop_recording(self) -> None:
         with self._rec_lock:
             self.recorder.stop()
+        self.health.flush()
 
     def restart_recording(self) -> None:
         """Rebuild the recorder (backend/quality may have changed) and restart it.
@@ -244,7 +259,7 @@ class Engine:
         never leak a second capture process."""
         with self._rec_lock:
             self.recorder.stop()                 # synchronous: old ffmpeg is gone
-            self.recorder = make_recorder(self.cfg)
+            self.recorder = make_recorder(self.cfg, self.health)
             self.recorder.start()
 
     # ───────── status for the dashboard ─────────
@@ -278,6 +293,20 @@ class Engine:
     def clips_dir(self) -> Path:
         return paths.clips_dir(self.cfg.get("storage.clips_dir", ""))
 
+    def can_batch_export(self) -> bool:
+        with self._lock:
+            phase, observed = self._game_phase, self._game_phase_at
+        if observed and time.monotonic() - observed < 25:
+            return phase in ("gameover", "menu")
+        if sys.platform != "win32":
+            return True
+        from .winprocess import is_running
+
+        try:
+            return not is_running("cs2.exe")
+        except OSError:
+            return False
+
     def storage_status(self) -> dict:
         folder = self.cfg.get("storage.clips_dir", "")
         if self.cfg.get("recording.backend") == "obs":
@@ -296,6 +325,7 @@ class Engine:
                 return saved, tuple(getattr(self.recorder, "last_saved_spans", ())) if saved else ()
             finally:
                 elapsed_ms = round((time.monotonic() - started) * 1000)
+                self.health.add(save_attempts=1, saves=int(saved is not None), save_ms=elapsed_ms)
                 with self._lock:
                     self._save_attempts += 1
                     self._save_successes += int(saved is not None)
@@ -347,8 +377,8 @@ class Engine:
         log(f"Saving highlight for {recent_kills} kill(s)")
         try:
             raw_tmp = self.clips_dir() / f".raw_{uuid.uuid4().hex[:8]}.mp4"
-            clip_path, spans = self._record_replay(clip_seconds, raw_tmp,
-                                                   highlight_ranges([stamp for stamp, _, _ in retained]))
+            ranges = highlight_ranges([stamp for stamp, _, _ in retained], *self.cfg.highlight_padding())
+            clip_path, spans = self._record_replay(clip_seconds, raw_tmp, ranges)
         except Exception as e:
             log(f"Replay save failed: {e}")
             clip_path = None
@@ -369,7 +399,7 @@ class Engine:
         debounce = float(self.cfg.get("engine.debounce_sec"))
         segment = max(1, int(self.cfg.get("recording.segment_time", 2)))
         history = HIGHLIGHT_HISTORY if self.cfg.get("recording.backend") == "builtin" else 0
-        return max(requested, history, debounce + 2 * segment)
+        return max(requested, history, max(debounce, self.cfg.highlight_padding()[1]) + 2 * segment)
 
     def _publish_clip(self, clip_path: Path, kills: int, map_name: str, round_n: int,
                       side: str, steam_name: str, steam_id: str, metadata: dict) -> None:
@@ -377,8 +407,7 @@ class Engine:
         produced = clip_path
         try:
             polished = None
-            prioritize_fps = (self.cfg.get("recording.backend") == "builtin"
-                              and self.cfg.get("recording.prioritize_game_fps", True))
+            prioritize_fps = self.cfg.get("recording.backend") == "builtin" and self.cfg.game_fps_priority()
             if not prioritize_fps:
                 polished = polish.polish_clip(self.cfg, clip_path, kills, map_name,
                                               steam_name, steam_id)

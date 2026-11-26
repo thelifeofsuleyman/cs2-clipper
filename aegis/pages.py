@@ -156,6 +156,23 @@ dialog::backdrop{background:#000a}
 .match-group summary span{color:var(--muted);font-size:13px;margin-left:9px}
 .match-round{padding:0 16px 16px}
 .match-round h3{margin:0 0 8px;font-size:14px;color:var(--muted)}
+.batch-actions,.batch-job{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;
+  gap:8px 14px;padding:12px 16px;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--r);margin:8px 0 16px}
+.batch-actions select{width:auto}
+.batch-picker{display:flex;align-items:center;gap:7px;margin-top:7px;font-size:12px;color:var(--muted)}
+.batch-picker input{width:16px;height:16px;accent-color:var(--accent)}
+.batch-job{align-items:start}
+.batch-job ul{margin:6px 0 0;padding-left:18px}
+.batch-job li{line-height:1.65}
+.batch-job li span{color:var(--muted)}
+.app-health{margin:0 0 16px;padding:12px 16px;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--r)}
+.app-health summary{cursor:pointer}
+.app-health label{display:flex;align-items:center;gap:8px;margin:10px 0}
+.app-health dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px}
+.app-health dd{margin:0;font-size:20px}
+.app-health dt,.app-health p{color:var(--muted)}
 .kill-timeline{margin:10px 0 14px;color:var(--muted);font-size:13px}
 .kill-track{position:relative;margin:6px 12px 0;height:26px}
 .kill-track::before{content:'';position:absolute;inset:11px 0 auto;height:4px;
@@ -255,10 +272,28 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
         <select id=clipSort aria-label="Sort clips"><option value=newest>Newest first</option><option value=largest>Largest first</option></select>
       </div>
     </div>
+    <div class=batch-actions id=batchSelection hidden>
+      <span id=batchCount role=status></span>
+      <div class=library-tools><label for=batchLimit>Limit per clip</label>
+        <select id=batchLimit><option value=10>10 MB</option><option value=25 selected>25 MB</option></select>
+        <button class=primary id=queueBatch>Queue exports</button></div>
+    </div>
+    <section id=batchJobs hidden aria-label="After-match exports"></section>
     <div class=grid id=clipGrid><div class=loading-msg>Loading clips…</div></div>
   </section>
 
   <section data-panel=logs hidden>
+    <details class=app-health id=appHealth>
+      <summary>App health counts</summary>
+      <label><input type=checkbox id=healthEnabled>Collect app health counts on this PC</label>
+      <p>Share a report by copying it. Reports contain only counts and timings.</p>
+      <div id=healthReport hidden>
+        <dl id=healthCounts></dl>
+        <div class=library-tools><button id=refreshDownloads>Refresh GitHub downloads</button>
+          <button id=copyHealth>Copy app health report</button></div>
+        <p id=healthMessage role=status></p>
+      </div>
+    </details>
     <div class=bar>
       <button class=ghost id=copyDiagnostics>Copy recorder diagnostics</button>
       <a class=settings-link href="https://github.com/thelifeofsuleyman/cs2-clipper/issues/new?template=recording.yml" target=_blank rel=noopener>Report a recording issue</a>
@@ -337,6 +372,9 @@ const ICONS={
 const ic=n=>`<svg class=ico viewBox="0 0 24 24">${ICONS[n]||''}</svg>`;
 const PLAY=`<div class=play><div class=pbtn>${ic('play')}</div></div>`;
 let library = [], activePage = 'clips', clipRequest = 0, fingerprint = '';
+const selectedForExport = new Set();
+let batchFingerprint = '';
+let batchRequest = 0;
 let playerTrigger, playerClipId, playerGeneration = 0, previewEnd;
 let shareId, shareGeneration = 0, shareUrl;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -360,6 +398,9 @@ function openTab(tab) {
   $('section[data-panel=logs]').hidden = tab !== 'logs';
   $('#clipFilter').hidden = tab === 'matches';
   $('#clipSort').hidden = tab === 'matches';
+  $('#batchJobs').hidden = tab !== 'matches' || !$('#batchJobs').childElementCount;
+  renderBatchSelection();
+  if (tab === 'matches') loadBatchJobs();
   if (tab === 'logs') loadLogs();
   else if (previous !== tab) {
     $('#clipSearch').value = '';
@@ -458,6 +499,10 @@ async function loadClips(force = false) {
   const version = JSON.stringify(r.clips);
   if (!force && version === fingerprint) return;
   library = r.clips;
+  for (const id of selectedForExport) {
+    if (!library.some(clip => clip.id === id && !clip.missing)) selectedForExport.delete(id);
+  }
+  renderBatchSelection();
   fingerprint = version;
   renderClips();
 }
@@ -540,6 +585,9 @@ function clipCard(c) {
       title + '">' + title + '</div><div class=meta>' + escape(c.map) +
       '<span class=sep></span>' + (c.missing ? 'File missing' : fileSize(c.size_bytes || 0)) + '</div>' +
       (targets ? '<div class=targets>' + targets + '</div>' : '') +
+      (activePage === 'matches' ? '<label class=batch-picker><input type=checkbox data-batch-select' +
+        (selectedForExport.has(c.id) ? ' checked' : '') + (c.missing ? ' disabled' : '') +
+        ' aria-label="Select ' + title + ' for export">Select for export</label>' : '') +
       '<div class=actions><button class="btn-icon fav ' + (c.favorite ? 'on' : '') +
       '" data-fav aria-pressed="' + Boolean(c.favorite) + '" aria-label="Favorite" title="Favorite">' + ic('star') +
       '</button><span class=spacer></span><button class=btn-icon aria-label="Share" title="Share" data-share' +
@@ -550,6 +598,17 @@ function clipCard(c) {
 
 function bindCard(card) {
   const id = card.dataset.id;
+  const batchPick = card.querySelector('[data-batch-select]');
+  if (batchPick) batchPick.onchange = () => {
+    if (batchPick.checked && selectedForExport.size >= %MAX_EXPORT_CLIPS%) {
+      batchPick.checked = false;
+      toast('Choose up to %MAX_EXPORT_CLIPS% clips per batch.');
+      return;
+    }
+    if (batchPick.checked) selectedForExport.add(id);
+    else selectedForExport.delete(id);
+    renderBatchSelection();
+  };
   const title = card.querySelector('[data-title]');
   card.querySelector('[data-play]').onclick = () => playVideo(id);
   title.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } };
@@ -592,6 +651,58 @@ function bindCard(card) {
     });
   };
 }
+
+function renderBatchSelection() {
+  const count = selectedForExport.size;
+  $('#batchSelection').hidden = activePage !== 'matches' || count === 0;
+  $('#batchCount').textContent = count + (count === 1 ? ' clip selected' : ' clips selected');
+}
+
+async function loadBatchJobs() {
+  const seq = ++batchRequest;
+  const data = await api('/api/batch-exports');
+  if (seq !== batchRequest || data.error) return;
+  const panel = $('#batchJobs');
+  const version = JSON.stringify(data.jobs);
+  panel.hidden = activePage !== 'matches' || !data.jobs.length;
+  if (version === batchFingerprint) return;
+  batchFingerprint = version;
+  const labels = {queued:'Waiting for a break in CS2', working:'Preparing…', error:'Export failed'};
+  panel.innerHTML = data.jobs.length ? '<h2>After-match exports</h2>' + data.jobs.map(job => {
+    const id = encodeURIComponent(job.id);
+    const rows = job.items.map((item, index) => {
+      const name = escape(item.title);
+      if (item.state === 'ready') {
+        return '<li><a href="/exports/' + id + '/' + index + '">Download ' + name +
+          '</a> <span>· ' + fileSize(item.bytes) + '</span></li>';
+      }
+      return '<li>' + name + ' <span>· ' + escape(item.error || labels[item.state]) + '</span></li>';
+    }).join('');
+    return '<div class=batch-job><div><strong>' + job.max_mb + ' MB per clip</strong><ul>' + rows +
+      '</ul></div><button data-remove-batch="' + id + '"' +
+      (job.items.some(item => item.state === 'working') ? ' disabled' : '') + '>Remove batch</button></div>';
+  }).join('') : '';
+  for (const button of panel.querySelectorAll('[data-remove-batch]')) {
+    button.onclick = () => {
+      if (!confirm('Remove this batch and its export copies?')) return;
+      busy(button, '', async () => {
+        const result = await api('/api/batch-exports/' + button.dataset.removeBatch, {method:'DELETE'});
+        if (result.error) toast(result.error);
+        else await loadBatchJobs();
+      });
+    };
+  }
+}
+
+$('#queueBatch').onclick = () => busy($('#queueBatch'), 'Queuing…', async () => {
+  const ids = [...selectedForExport];
+  const result = await api('/api/batch-exports', jsonPost({clip_ids:ids, max_mb:Number($('#batchLimit').value)}));
+  if (result.error) { toast(result.error); return; }
+  for (const id of ids) selectedForExport.delete(id);
+  renderBatchSelection();
+  renderClips();
+  await loadBatchJobs();
+});
 
 $('#clipSearch').oninput = renderClips;
 $('#clipFilter').onchange = renderClips;
@@ -656,6 +767,55 @@ async function loadLogs() {
   box.textContent = r.error || (r.lines || []).join('\\n') || 'No activity yet.';
   box.scrollTop = box.scrollHeight;
 }
+let healthCounts = {};
+let healthRequest = 0;
+async function loadAppHealth(downloads = false) {
+  const seq = ++healthRequest;
+  const data = await api('/api/app-health' + (downloads ? '?downloads=1' : ''));
+  if (seq !== healthRequest || data.error) return;
+  $('#healthEnabled').checked = data.enabled;
+  $('#healthReport').hidden = !data.enabled;
+  healthCounts = data.counts || {};
+  if (!data.enabled) return;
+  const n = healthCounts;
+  const stats = [
+    ['Latest release downloads', n.latest_release_downloads ?? '—'],
+    ['Average capture start', n.capture_ready ? Math.round(n.capture_start_ms / n.capture_ready) + ' ms' : '—'],
+    ['Replay save success', n.save_attempts ? Math.round(n.saves / n.save_attempts * 100) + '% (' + n.saves + '/' + n.save_attempts + ')' : '—'],
+    ['Dropped capture frames', n.frames_output ? n.frames_dropped.toLocaleString() : '—'],
+  ];
+  $('#healthCounts').innerHTML = stats.map(([label, value]) =>
+    '<div><dt>' + label + '</dt><dd>' + escape(value) + '</dd></div>').join('');
+  if (downloads) $('#healthMessage').textContent = data.download_error ||
+    (n.latest_release_downloads == null ? 'GitHub did not report a download count.' : 'Download count refreshed.');
+}
+$('#appHealth').ontoggle = () => {
+  if ($('#appHealth').open) loadAppHealth();
+};
+$('#healthEnabled').onchange = async () => {
+  const toggle = $('#healthEnabled');
+  toggle.disabled = true;
+  try {
+    const result = await api('/api/config', jsonPost({metrics:{enabled:toggle.checked}}));
+    if (result.error) toast(result.error);
+    $('#healthMessage').textContent = '';
+    await loadAppHealth();
+  } finally {
+    toggle.disabled = false;
+  }
+};
+$('#refreshDownloads').onclick = () => busy($('#refreshDownloads'), 'Checking…', () => loadAppHealth(true));
+$('#copyHealth').onclick = () => busy($('#copyHealth'), '', async () => {
+  await loadAppHealth();
+  if (!Object.keys(healthCounts).length) return;
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(healthCounts, null, 2));
+    $('#healthMessage').textContent = 'App health report copied.';
+  } catch {
+    $('#healthMessage').textContent = 'Could not copy the app health report.';
+  }
+});
+
 $('#copyDiagnostics').onclick = () => busy($('#copyDiagnostics'), 'Copying…', async () => {
   const diagnostics = await api('/api/diagnostics');
   if (diagnostics.error) { toast(diagnostics.error); return; }
@@ -859,7 +1019,10 @@ if (%AUTO_UPDATE%) checkUpdate();
 setInterval(loadStatus, 3000);
 setInterval(() => {
   if (activePage === 'logs') loadLogs();
-  else if (!$('#clipGrid').contains(document.activeElement)) loadClips();
+  else {
+    if (!$('#clipGrid').contains(document.activeElement)) loadClips();
+    if (activePage === 'matches') loadBatchJobs();
+  }
 }, 5000);
 </script></body></html>"""
 
@@ -944,6 +1107,7 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
     <div class=row><label for=rec_gate>Capture only while CS2 is open</label><input type=checkbox id=rec_gate checked></div>
     <details id=qualityDetails><summary>Advanced capture quality</summary>
     <div class=row><label for=rec_preset>Quality preset<small id=qualityHint></small></label><select id=rec_preset>
+      <option value=gpu_only>Direct GPU only · up to 30 fps</option>
       <option value=low>720p · 30 fps</option><option value=medium selected>900p · 30 fps</option>
       <option value=high>1080p · 60 fps</option><option value=source>Native · 60 fps</option>
     </select></div>
@@ -983,6 +1147,15 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
       <option value=all>All modes</option>
       <option value=off>Off · manual replays only</option>
     </select></div>
+    <div class=row><label for=highlight_window>Footage around each kill<small id=highlightWindowHelp></small></label>
+      <select id=highlight_window><option value=standard>Standard</option><option value=competitive>Competitive</option>
+        <option value=custom>Custom</option></select></div>
+    <div id=highlightCustom hidden>
+      <div class=row><label for=highlight_before>Seconds before each kill</label>
+        <input id=highlight_before type=number min=.5 max=10 step=.25 value=2></div>
+      <div class=row><label for=highlight_after>Seconds after each kill</label>
+        <input id=highlight_after type=number min=.5 max=10 step=.25 value=1></div>
+    </div>
     <div class=row><label for=debounce>Streak gap in seconds<small>Aegis waits this long after a kill before saving the streak.</small></label><input id=debounce type=number min=1 max=30 step=.1 value=7></div>
     <div class=row><label for=minkills>Minimum kills</label><input id=minkills type=number min=1 max=10 value=1></div>
     <div class=row><label for=polish_en>Add clip intro and fades<small id=effectsHint></small></label><input type=checkbox id=polish_en checked></div>
@@ -1074,6 +1247,9 @@ async function loadExisting() {
   $('#debounce').value = e.debounce_sec ?? 7;
   $('#minkills').value = e.min_kills ?? 1;
   $('#highlight_modes').value = e.highlight_modes || 'no_deathmatch';
+  $('#highlight_window').value = e.highlight_window || 'standard';
+  $('#highlight_before').value = e.highlight_before ?? 2;
+  $('#highlight_after').value = e.highlight_after ?? 1;
   $('#cs2_cfg_dir').value = e.cs2_cfg_dir || '';
   $('#tg_en').checked = !!tg.enabled;
   $('#tg_token').value = tg.bot_token || '';
@@ -1093,11 +1269,17 @@ function readSettings() {
   const backend = $('#rec_backend').value;
   const clip = $('#rec_clip');
   const port = $('#obs_port');
+  const custom = $('#highlight_window').value === 'custom';
+  const before = $('#highlight_before');
+  const after = $('#highlight_after');
   return {
     storage:{clips_dir:$('#clips_dir').value.trim()},
     hotkeys:{replay:$('#replay_hotkey').value},
     engine:{debounce_sec:$('#debounce').valueAsNumber, min_kills:$('#minkills').valueAsNumber,
       highlight_modes:$('#highlight_modes').value,
+      highlight_window:$('#highlight_window').value,
+      highlight_before:custom || before.value && before.checkValidity() ? before.valueAsNumber : savedSettings?.engine.highlight_before ?? 2,
+      highlight_after:custom || after.value && after.checkValidity() ? after.valueAsNumber : savedSettings?.engine.highlight_after ?? 1,
       cs2_cfg_dir:$('#cs2_cfg_dir').value.trim()},
     recording:{backend, preset:$('#rec_preset').value,
       prioritize_game_fps:$('#rec_performance').checked,
@@ -1121,15 +1303,22 @@ function hasChanges() {
 }
 function renderSettings(status, type) {
   const obs = $('#rec_backend').value === 'obs';
-  const prioritize = $('#rec_performance').checked && !obs;
+  const gpuOnly = $('#rec_preset').value === 'gpu_only';
+  const prioritize = ($('#rec_performance').checked || gpuOnly) && !obs;
   $('#builtinFields').hidden = obs;
   $('#obsFields').hidden = !obs;
   $('#captureBtn').hidden = obs;
-  $('#qualityHint').textContent = prioritize ? 'Direct GPU capture uses desktop resolution and runs at up to 30 FPS.' : '';
+  $('#qualityHint').textContent = gpuOnly ? 'Uses native resolution and requires direct GPU capture.' :
+    prioritize ? 'Direct GPU capture uses desktop resolution and runs at up to 30 FPS.' : '';
   $('#testHelp').textContent = obs ? 'Start Replay Buffer in OBS, then use Save replay in the library. A sample clip checks playback.' :
     'Check five seconds of screen video outside a match. To check speaker audio, use Save replay while CS2 is open and playing sound.';
   $('#polish_en').disabled = prioritize;
   $('#effectsHint').textContent = prioritize ? 'Paused while Prioritize game FPS is on.' : '';
+  const highlightWindow = $('#highlight_window').value;
+  $('#highlightCustom').hidden = highlightWindow !== 'custom';
+  const padding = {standard:'2 seconds before and 1 after.', competitive:'1 second before and 0.75 after.', custom:''};
+  $('#highlightWindowHelp').textContent = [padding[highlightWindow],
+    obs ? '' : 'Built-in clips can include extra footage at segment boundaries.'].filter(Boolean).join(' ');
   if (!savedSettings) return;
   const dirty = hasChanges();
   $('#finishBtn').disabled = settingsBusy || (!firstRun && !dirty);
@@ -1142,7 +1331,9 @@ function renderSettings(status, type) {
 async function save() {
   const snapshot = readSettings();
   const obs = snapshot.recording.backend === 'obs';
-  for (const field of [obs ? '#obs_port' : '#rec_clip', '#debounce', '#minkills']) {
+  const required = [obs ? '#obs_port' : '#rec_clip', '#debounce', '#minkills'];
+  if (snapshot.engine.highlight_window === 'custom') required.push('#highlight_before', '#highlight_after');
+  for (const field of required) {
     const input = $(field);
     if (!input.value || !input.checkValidity()) {
       const section = input.closest('[data-settings-panel]').id;

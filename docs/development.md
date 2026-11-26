@@ -77,4 +77,27 @@ download, or a portable copy.
 The app's **Copy recorder diagnostics** action exports local, per-session
 recorder status and replay save counts. Users can paste that report into a
 [recording issue](https://github.com/thelifeofsuleyman/cs2-clipper/issues/new?template=recording.yml).
-The app does not collect active users or transmit these diagnostics.
+**App health counts** in Activity is an opt-in local report with startup
+durations, replay save outcomes, and FFmpeg's built-in recorder frame counters.
+Capture frame counts start with the next recorder session after opting in.
+The report can include public download counts for the latest release. The user
+chooses when and where to share the copied report.
+
+## CS2 demo benchmark
+
+The Windows test replayed the same Nuke demo section from tick 3,850 for about
+24 seconds per pass on a GeForce GTX 1650. Capture-on passes used direct D3D11,
+NVENC, and desktop audio. Average FPS and 1% lows are estimates from CS2's
+integer FPS histogram. The 1% low is the effective FPS of the slowest 1% of
+frames. These short demo passes measure replay performance on one PC.
+
+| Capture condition | Runs | Average FPS | 1% low FPS |
+| --- | ---: | ---: | ---: |
+| Capture off | 2 | 101.6–110.8 | 51.8–65.6 |
+| Existing 30 FPS preset | 1 | 84.7 | 43.3 |
+| 24 FPS trial | 2 | 80.5–92.2 | 34.9–42.3 |
+| 18 FPS trial | 1 | 87.0 | 34.4 |
+
+Reducing capture FPS had inconsistent results, so the default frame rates stay
+as they were. The optional **Direct GPU only** preset limits capture to the
+D3D11 hardware path. It reports an error when that path is unavailable.
