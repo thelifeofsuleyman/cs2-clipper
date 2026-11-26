@@ -114,11 +114,9 @@ jobs:
         run: |
           test -s RoundLatch-Setup.exe && test -s RoundLatch-portable.zip || exit 1
           assets=(RoundLatch-Setup.exe RoundLatch-portable.zip)
-          notes=(--generate-notes)
           if [[ "$RELEASE_TAG" == v2.1.27 ]]; then
             # Old clients look for this asset by its exact name.
             cp RoundLatch-Setup.exe AegisClipper-Setup.exe
             assets+=("AegisClipper-Setup.exe#Installer for automatic upgrades from Aegis Clipper")
-            notes=(--notes-from-tag)
           fi
-          gh release create "$RELEASE_TAG" --verify-tag --title "RoundLatch $RELEASE_TAG" "${notes[@]}" "${assets[@]}"
+          gh release create "$RELEASE_TAG" --verify-tag --title "RoundLatch $RELEASE_TAG" --generate-notes "${assets[@]}"
