@@ -19,5 +19,5 @@ Package layout:
   app         - process entry: engine + dashboard + system tray
 """
 
-__version__ = "2.1.27"
+__version__ = "2.1.28"
 APP_NAME = "RoundLatch"
