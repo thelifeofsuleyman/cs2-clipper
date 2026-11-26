@@ -20,10 +20,10 @@ from stat import S_ISREG
 
 from flask import Flask, Response, abort, g, jsonify, redirect, request, send_file
 
-from . import __version__, config, media, paths, update
+from . import __version__, audio, config, library_backup, media, paths, update
 from .batch_exports import BatchExports, LIMITS_MB, MAX_CLIPS
 from .config import Config
-from .clips import Catalog, ClipBudgetFull
+from .clips import Catalog, ClipBudgetFull, collection_names
 from .engine import Engine, format_caption
 from .log import log, recent
 from .pages import DASHBOARD_HTML, SETUP_HTML
@@ -64,7 +64,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         if nonce := g.get("csp_nonce"):
             response.headers["Content-Security-Policy"] = (
                 f"default-src 'self'; script-src 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; "
-                "img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+                "img-src 'self' data:; media-src 'self' blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
             )
         return response
 
@@ -130,6 +130,30 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
             this_session=engine.replay_metrics(),
         )
 
+    @app.get("/api/audio-status")
+    def api_audio_status():
+        status = engine.recorder.status()
+        return jsonify(source=status.get("audio_source", "off"), level=status.get("audio_level", 0),
+                       warning=status.get("audio_warning", ""), state=status.get("audio", "off"))
+
+    @app.post("/api/audio-preview")
+    def api_audio_preview():
+        body = request.get_json(silent=True)
+        source = body.get("source") if isinstance(body, dict) else None
+        if source not in ("cs2", "desktop") or (source == "desktop" and cfg.window_capture()):
+            return jsonify(error="Choose an allowed recording audio source."), 400
+
+        def preview():
+            with tempfile.TemporaryDirectory(prefix="roundlatch-audio-") as scratch:
+                wav = Path(scratch) / "preview.wav"
+                try:
+                    audio.capture_preview(source, wav)
+                except (ValueError, OSError) as exc:
+                    return jsonify(error=str(exc)), 422
+                return send_file(BytesIO(wav.read_bytes()), mimetype="audio/wav")
+
+        return run_media_job(preview, clip_edit)
+
     @app.get("/api/app-health")
     def api_app_health():
         enabled = engine.health.enabled
@@ -181,7 +205,15 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
                                or not all(isinstance(tag, str) for tag in body["tags"])):
             return jsonify(error="Tags must be a list of text labels."), 400
         allowed = {k: body[k] for k in ("title", "tags", "favorite") if k in body}
-        c = catalog.update(clip_id, **allowed)
+        if "collections" in body:
+            try:
+                allowed["collections"] = collection_names(body["collections"])
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
+        try:
+            c = catalog.update(clip_id, **allowed)
+        except OSError:
+            return jsonify(error="Could not save the clip library."), 503
         return (jsonify(_clip_json(c)) if c else (jsonify(error="not found"), 404))
 
     @app.delete("/api/clips/<clip_id>")
@@ -239,6 +271,40 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         except (OSError, ValueError, RuntimeError):
             return jsonify(error="Could not reconnect clips. Check the folder paths and try again."), 400
         return jsonify(ok=True, count=count)
+
+    @app.post("/api/library-backup")
+    def api_library_backup():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or body.get("action") not in ("create", "restore"):
+            return jsonify(error="Choose to create or restore a library backup."), 400
+        try:
+            archive = library_backup.backup_path(body.get("path"))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        create = body["action"] == "create"
+        include_videos = body.get("videos", False)
+        folder = body.get("folder", "")
+        if type(include_videos) is not bool or not isinstance(folder, str):
+            return jsonify(error="Check the video option and folder path."), 400
+
+        def handle():
+            try:
+                if create:
+                    result = library_backup.create_backup(catalog, archive, include_videos)
+                else:
+                    target = paths.clips_dir(folder.strip()) if folder.strip() else engine.clips_dir()
+                    result = library_backup.restore_backup(catalog, archive, target, cfg.clip_budget_bytes())
+            except FileExistsError:
+                return jsonify(error="That backup already exists. Choose another name."), 409
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
+            except ClipBudgetFull:
+                raise
+            except OSError:
+                return jsonify(error="Could not access the backup or clip folder. Check its path and free space."), 503
+            return jsonify(ok=True, **result)
+
+        return run_media_job(handle, clip_edit)
 
     @app.post("/api/clips/<clip_id>/share")
     def api_share_clip(clip_id: str):
@@ -338,6 +404,17 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
                              mimetype=_VIDEO_MIME[source.suffix], conditional=True)
         return "not found", 404
 
+    @app.get("/exports/<job_id>/zip")
+    def download_batch_zip(job_id: str):
+        try:
+            archive = exports.bundle(job_id)
+        except OSError:
+            return jsonify(error="Could not package these exports. Check free disk space."), 503
+        if not archive:
+            return "Export batch is unavailable.", 404
+        return send_file(archive, download_name="RoundLatch-exports.zip",
+                         as_attachment=True, mimetype="application/zip")
+
     @app.post("/api/clips/<clip_id>/trim")
     def api_trim_clip(clip_id: str):
         clip = catalog.get(clip_id)
@@ -429,6 +506,10 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         if patch.get("engine", {}).get("highlight_modes", "all") not in ("off", "all", "no_deathmatch", "competitive"):
             return jsonify(error="Choose a supported automatic highlight mode."), 400
         highlights = patch.get("engine", {})
+        for mode in ("premier", "competitive", "deathmatch"):
+            limit = highlights.get(f"{mode}_clip_limit", -1)
+            if type(limit) is not int or not -1 <= limit <= 20:
+                return jsonify(error="Use -1 for the default, 0 to turn a mode off, or a limit from 1 to 20."), 400
         if highlights.get("highlight_window", "standard") not in ("standard", "competitive", "custom"):
             return jsonify(error="Choose a supported highlight timing preset."), 400
         for key in ("highlight_before", "highlight_after"):
@@ -436,6 +517,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
                 return jsonify(error="Choose 0.5 to 10 seconds around each kill."), 400
         if patch.get("recording", {}).get("audio_source", "off") not in ("off", "desktop", "cs2"):
             return jsonify(error="Choose a supported recording audio source."), 400
+        if type(patch.get("recording", {}).get("window_only", False)) is not bool:
+            return jsonify(error="Choose whether to capture only the CS2 window."), 400
         if "replay" in patch.get("hotkeys", {}):
             from .hotkeys import parse_hotkey
 
@@ -525,6 +608,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
     @app.post("/api/capture-test")
     def api_capture_test():
+        if cfg.window_capture():
+            return jsonify(ok=False, error="Focus CS2 and use your replay shortcut to test window capture."), 409
         return run_media_job(lambda: jsonify(engine.trigger_capture_test()))
 
     @app.post("/api/replay")
@@ -608,9 +693,10 @@ _UI_SETTINGS = {
     "metrics": {"enabled": bool},
     "hotkeys": {"replay"},
     "engine": {"debounce_sec", "min_kills", "highlight_modes", "cs2_cfg_dir",
-               "highlight_window", "highlight_before", "highlight_after"},
+               "highlight_window", "highlight_before", "highlight_after",
+               "premier_clip_limit", "competitive_clip_limit", "deathmatch_clip_limit"},
     "recording": {"backend", "preset", "prioritize_game_fps", "speaker_audio", "audio_source", "compact_video",
-                  "clip_seconds", "only_when_game_running"},
+                  "clip_seconds", "only_when_game_running", "window_only"},
     "polish": {"enabled"},
     "obs": {"replay_dir", "port", "password"},
     "uploads": {
@@ -650,6 +736,7 @@ def _clip_json(c) -> dict:
         "size_bytes": size, "uploads": c.uploads, "missing": size is None,
         "match_id": c.match_id, "match_mode": c.match_mode, "match_started": c.match_started,
         "kill_markers": c.kill_markers,
+        "collections": c.collections,
     }
 
 

@@ -23,6 +23,18 @@ class ClipBudgetFull(OSError):
         super().__init__("The clip storage budget is full. Free space in Recently deleted or increase the budget.")
 
 
+class HighlightNotKept(ValueError):
+    """The saved streak is below the configured per-match cutoff."""
+
+
+def collection_names(values) -> list[str]:
+    if (not isinstance(values, list) or len(values) > 30
+            or any(not isinstance(value, str) or not 1 <= len(value.strip()) <= 60
+                   or any(ord(char) < 32 for char in value) for value in values)):
+        raise ValueError("Choose up to 30 collection names of 1 to 60 characters.")
+    return list(dict.fromkeys(value.strip() for value in values))
+
+
 @dataclass
 class Clip:
     id: str
@@ -44,6 +56,8 @@ class Clip:
     match_started: float = 0.0
     kill_markers: list[dict] = field(default_factory=list)
     deleted: bool = False
+    collections: list[str] = field(default_factory=list)
+    ranked_highlight: bool = False
 
     def exists(self) -> bool:
         return Path(self.path).is_file()
@@ -85,21 +99,85 @@ class Catalog:
                     self._clips[clip.id] = previous
                 raise
 
-    def get(self, clip_id: str) -> Clip | None:
+    def get(self, clip_id: str, *, include_deleted: bool = False) -> Clip | None:
         with self._lock:
             clip = self._clips.get(clip_id)
-            return clip if clip and not clip.deleted else None
+            return clip if clip and (include_deleted or not clip.deleted) else None
+
+    def restore(self, records: list[Clip], budget: int = 0) -> None:
+        """Apply a backup in a single catalog write, keeping local paths that still work."""
+        with self._lock:
+            previous = self._clips
+            current_bytes = self._used_bytes_locked() if budget else 0
+            updated = previous.copy()
+            for record in records:
+                local = previous.get(record.id)
+                if local:
+                    still_exists = local.exists()
+                    record = replace(record, path=local.path if still_exists else record.path,
+                                     thumb=local.thumb, uploads=local.uploads, deleted=local.deleted,
+                                     ranked_highlight=still_exists and local.ranked_highlight)
+                updated[record.id] = record
+            self._clips = updated
+            try:
+                if budget and self._used_bytes_locked() > max(budget, current_bytes):
+                    raise ClipBudgetFull()
+                self._save_locked()
+            except OSError:
+                self._clips = previous
+                raise
+
+    def _match_candidates(self, match_id: str) -> list[Clip]:
+        return [clip for clip in self._clips.values() if clip.match_id == match_id
+                and clip.ranked_highlight and not (clip.favorite or clip.deleted or clip.collections)]
+
+    def would_keep_highlight(self, match_id: str, kills: int, limit: int) -> bool:
+        with self._lock:
+            candidates = self._match_candidates(match_id)
+            return len(candidates) < limit or kills > sorted((c.kills for c in candidates), reverse=True)[limit - 1]
+
+    def add_ranked(self, clip: Clip, limit: int, budget: int = 0) -> None:
+        with self._lock:
+            candidates = [*self._match_candidates(clip.match_id), clip]
+            kept = sorted(candidates, key=lambda c: (-c.kills, c.created, c.id))[:limit]
+            if clip not in kept:
+                raise HighlightNotKept()
+            retired = [candidate for candidate in candidates if candidate not in kept]
+            retired_ids = {removed.id for removed in retired}
+            previous = self._clips
+            self._clips = {key: value for key, value in previous.items() if key not in retired_ids}
+            self._clips[clip.id] = replace(clip, ranked_highlight=True)
+            try:
+                if budget and self._used_bytes_locked() > budget:
+                    raise ClipBudgetFull()
+                self._save_locked()
+            except OSError:
+                self._clips = previous
+                raise
+            live_files = {Path(c.path) for c in self._clips.values()}
+            for old in retired:
+                old_path = Path(old.path)
+                try:
+                    if old_path not in live_files:
+                        old_path.unlink(missing_ok=True)
+                    if old.thumb:
+                        (paths.thumbs_dir() / Path(old.thumb).name).unlink(missing_ok=True)
+                except OSError as exc:
+                    log(f"Could not remove a replaced highlight: {exc}")
 
     def update(self, clip_id: str, **fields: Any) -> Clip | None:
         with self._lock:
             c = self._clips.get(clip_id)
             if c is None or c.deleted:
                 return None
-            for k, v in fields.items():
-                if hasattr(c, k):
-                    setattr(c, k, v)
-            self._save_locked()
-            return c
+            updated = replace(c, **{key: value for key, value in fields.items() if key in Clip.__dataclass_fields__})
+            self._clips[clip_id] = updated
+            try:
+                self._save_locked()
+            except OSError:
+                self._clips[clip_id] = c
+                raise
+            return updated
 
     def set_upload_status(self, clip_id: str, target: str, status: str) -> None:
         with self._lock:
@@ -183,7 +261,7 @@ class Catalog:
                 if (not target.is_relative_to(new_folder) or target in occupied
                         or target.suffix.lower() not in {".mp4", ".mkv", ".mov"} or not target.is_file()):
                     continue
-                updated[clip.id] = replace(clip, path=str(target))
+                updated[clip.id] = replace(clip, path=str(target), ranked_highlight=False)
                 occupied.add(target)
                 count += 1
             if count:

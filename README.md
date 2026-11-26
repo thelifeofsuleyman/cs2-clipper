@@ -49,6 +49,12 @@ the person you are spectating don't trigger a clip. Set a global replay shortcut
 under **Settings → Recording** to save a replay during a match. The tray and
 dashboard confirm the save or show why it failed.
 
+Use **Clip limits by match mode** to disable Premier, Competitive, or
+Deathmatch highlights individually, or keep a set number of highest-kill
+highlights per match. Stronger clips can replace weaker automatic clips.
+Favorites, clips assigned to collections, and manual replays stay in the
+library. Ranked highlights are available for manual sharing.
+
 Use **Settings → Storage** to pick the folder for new clips. Sort the library by
 **Largest first** to find clips taking up space. RoundLatch warns when the clip or
 replay buffer drive has less than 2 GiB free.
@@ -56,6 +62,9 @@ Set a clip storage budget to limit new saves. Delete moves clips to **Recently
 deleted**, where you can restore them or delete their videos to reclaim space.
 Favorite clips are protected until you unfavorite them. In **Settings →
 Storage**, use **Reconnect moved clips** to restore links to moved video files.
+Use **Back up or restore the library** to save clip titles, favorites, tags,
+and collections to a ZIP. Select **Include videos** to take your clips to
+another PC.
 
 Open a video and click a kill marker to jump to the action. Choose **Trim clip**
 to set the start and end around it, preview the selection, and save a separate
@@ -72,6 +81,8 @@ In **Share**, download the original or prepare a local MP4 copy for a 10 MB or
 In the trim editor, preview the selection and its estimated size, then export
 only that selection with **Share selection**. If CS2 is active, copies that
 need encoding go to **Matches → After-match exports**.
+Use a clip’s **Edit collections** button to group it with related highlights.
+In **Collections**, select clips, queue an export batch, and download its ZIP.
 In **Matches**, select up to 12 clips and queue exports with a limit per clip.
 The queue prepares copies after the match and waits if a new match starts.
 With CS2 open and game updates unavailable, queued exports wait for CS2 to close.
@@ -87,6 +98,12 @@ at up to 30 FPS. If direct capture is unavailable, the dashboard reports the err
 In **Settings → Recording**, select **CS2 only** to capture game audio on Windows
 11. Choose **Desktop audio** to capture sounds from the default playback device.
 If you use OBS Studio, choose audio sources in OBS.
+
+Enable **Capture only the CS2 window** to capture the game’s window and
+pause when you switch away. Use borderless windowed mode if exclusive fullscreen
+prevents Windows from capturing the game. The built-in audio controls show
+playback levels, warn about silence or a changed default device, and can record
+a short audio preview.
 
 ## Troubleshooting
 

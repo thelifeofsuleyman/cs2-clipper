@@ -34,7 +34,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 from . import media, paths
-from .audio import ProcessAudioBuffer, SpeakerBuffer
+from .audio import AudioBuffer, PlaybackDevice, ProcessAudioBuffer, SpeakerBuffer
 from .config import Config
 from .log import log
 
@@ -90,6 +90,11 @@ def capture_candidates(ffmpeg: str, cfg: Config) -> list[tuple[str, str]]:
     method = cfg.get("recording.capture", "ddagrab")
     methods = ("gdigrab", "ddagrab") if method == "gdigrab" else ("ddagrab", "gdigrab")
     preset = cfg.get("recording.preset")
+    if cfg.window_capture():
+        direct = [("gfxcapture-d3d11", encoder) for encoder in choices if encoder in _D3D11_ENCODERS]
+        if preset == "gpu_only":
+            return direct
+        return direct + [("gfxcapture", encoder) for encoder in choices]
     if preset == "gpu_only":
         return [("ddagrab-d3d11", encoder) for encoder in choices if encoder in _D3D11_ENCODERS]
     prefer_direct = preset != "light" and (cfg.game_fps_priority() or preset == "source")
@@ -142,9 +147,18 @@ def capture_options(cfg: Config, encoder: str) -> tuple[int, int, int, str]:
 
 
 def capture_video_args(width: int, height: int, fps: int, encoder: str, bitrate: str,
-                       method: str, performance: bool, compact: bool = False) -> list[str]:
+                       method: str, performance: bool, compact: bool = False,
+                       window_handle: int | None = None) -> list[str]:
     args = []
-    if method == "gdigrab":
+    if method in ("gfxcapture", "gfxcapture-d3d11"):
+        if type(window_handle) is not int or window_handle <= 0:
+            raise ValueError("Window capture needs the verified game window.")
+        chain = (f"gfxcapture=hwnd={window_handle}:max_framerate={fps}:capture_cursor=0:"
+                 f"width={width or -2}:height={height or -2}:resize_mode=scale_aspect")
+        if method == "gfxcapture":
+            chain += ",hwdownload,format=bgra,format=nv12"
+        args += ["-filter_complex", chain, "-r", str(fps)]
+    elif method == "gdigrab":
         args += ["-f", "gdigrab", "-framerate", str(fps), "-i", "desktop"]
         if width and height:
             scale = f"scale={width}:{height}"
@@ -184,6 +198,7 @@ def build_capture_cmd(
     direct_gpu: bool = False,
     performance: bool = False,
     compact: bool = False,
+    window_handle: int | None = None,
 ) -> list[str]:
     """ffmpeg command for the continuous rolling-buffer capture.
 
@@ -193,7 +208,9 @@ def build_capture_cmd(
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
 
     method = "ddagrab-d3d11" if direct_gpu else ("ddagrab" if use_ddagrab else "gdigrab")
-    cmd += capture_video_args(width, height, fps, encoder, bitrate, method, performance, compact)
+    if window_handle is not None:
+        method = "gfxcapture-d3d11" if direct_gpu else "gfxcapture"
+    cmd += capture_video_args(width, height, fps, encoder, bitrate, method, performance, compact, window_handle)
     cmd += [
         "-g", str(fps * segment_time),
         "-force_key_frames", f"expr:gte(t,n_forced*{segment_time})",
@@ -297,6 +314,8 @@ class BuiltinRecorder(Recorder):
         self._last_segment_at = 0.0
         self._last_segment_write = 0
         self._speaker: SpeakerBuffer | ProcessAudioBuffer | None = None
+        self._capture_window: int | None = None
+        self._playback_device: PlaybackDevice | None = None
         # Each recorder instance gets its OWN buffer dir. If a config change spins
         # up a new recorder, its ffmpeg can't collide with a lingering old one's
         # segment files, and an in-flight save() reads from a stable directory.
@@ -335,24 +354,37 @@ class BuiltinRecorder(Recorder):
         gate = bool(self.cfg.get("recording.only_when_game_running", True))
         game = self.cfg.get("recording.game_process", "cs2.exe")
         game_audio = self.cfg.audio_source() == "cs2"
+        window_only = self.cfg.window_capture()
         segment_time = max(1, int(self.cfg.get("recording.segment_time", 2)))
         choices: list[tuple[str, str]] = []
         next_choice = 0
         while not self._stop.is_set():
             try:
                 pid = None
+                hwnd = None
                 try:
-                    if game_audio and sys.platform == "win32":
+                    if window_only:
+                        if sys.platform != "win32":
+                            self._stage = "error"
+                            self._detail = "CS2 window capture requires Windows."
+                            return
+                        from .winprocess import foreground_window
+                        target = foreground_window("cs2.exe")
+                        if target:
+                            hwnd, pid = target
+                        want = bool(hwnd)
+                    elif game_audio and sys.platform == "win32":
                         from .winprocess import process_id
                         try:
                             pid = process_id("cs2.exe")
                         except OSError:
                             if gate and game.casefold() == "cs2.exe":
                                 raise
-                    want = (not gate) or (
-                        pid is not None if game_audio and game.casefold() == "cs2.exe"
-                        else _process_running(game)
-                    )
+                    if not window_only:
+                        want = (not gate) or (
+                            pid is not None if game_audio and game.casefold() == "cs2.exe"
+                            else _process_running(game)
+                        )
                 except OSError as e:
                     if self._stage != "error":
                         log(f"Stopped capture because CS2 could not be detected: {e}")
@@ -365,10 +397,14 @@ class BuiltinRecorder(Recorder):
                 with self._lock:
                     proc = self._proc
                 if not want:
-                    self._game_closed()
+                    self._game_closed("paused_window" if window_only else "waiting_game")
                     choices = []
                     next_choice = 0
                 else:
+                    if window_only and self._capture_window != hwnd:
+                        self._kill_proc()
+                        proc = None
+                        choices, next_choice = [], 0
                     if proc is not None:
                         if proc.poll() is not None:
                             self._capture_failed(f"FFmpeg exited ({proc.returncode})")
@@ -395,7 +431,10 @@ class BuiltinRecorder(Recorder):
                             continue
                         method, encoder = choices[next_choice]
                         next_choice += 1
-                        self._spawn(ffmpeg, method, encoder, segment_time)
+                        if window_only:
+                            self._spawn(ffmpeg, method, encoder, segment_time, window_handle=hwnd)
+                        else:
+                            self._spawn(ffmpeg, method, encoder, segment_time)
                     if game_audio:
                         with self._lock:
                             speaker = self._speaker
@@ -406,12 +445,12 @@ class BuiltinRecorder(Recorder):
                 self._detail = str(e)
                 log(f"Built-in recorder supervisor error: {e}")
                 self._kill_proc()
-            self._stop.wait(2.0)
+            self._stop.wait(.25 if window_only else 2.0)
         self._kill_proc()  # ensure ffmpeg is gone when the loop exits
         shutil.rmtree(self._bdir, ignore_errors=True)
         self._stage = "idle"
 
-    def _game_closed(self) -> None:
+    def _game_closed(self, state: str = "waiting_game") -> None:
         now = time.monotonic()
         with self._lock:
             if self._proc is not None and self._stage == "ready":
@@ -421,7 +460,7 @@ class BuiltinRecorder(Recorder):
         self._kill_proc()
         if expired:
             self._discard_segments()
-        self._stage = "waiting_game"
+        self._stage = state
         self._detail = ""
 
     def _check_segment_progress(self, segment_time: int) -> str:
@@ -454,7 +493,8 @@ class BuiltinRecorder(Recorder):
                 continue
         return entries
 
-    def _spawn(self, ffmpeg: str, method: str, encoder: str, seg_time: int) -> None:
+    def _spawn(self, ffmpeg: str, method: str, encoder: str, seg_time: int,
+               *, window_handle: int | None = None) -> None:
         if self._stop.is_set():        # bail if a stop raced in
             return
 
@@ -472,10 +512,12 @@ class BuiltinRecorder(Recorder):
         cmd = build_capture_cmd(
             ffmpeg, bdir, width=w, height=h, fps=fps, encoder=encoder,
             bitrate=bitrate, segment_time=seg_time, segment_wrap=wrap,
-            use_ddagrab=method != "gdigrab", direct_gpu=method == "ddagrab-d3d11",
+            use_ddagrab=method != "gdigrab", direct_gpu=method in ("ddagrab-d3d11", "gfxcapture-d3d11"),
             performance=performance,
             compact=bool(self.cfg.get("recording.compact_video")),
+            window_handle=window_handle,
         )
+        self._capture_window = window_handle
         self._method, self._encoder = method, encoder
         self._fps = fps
         self._stage = "starting"
@@ -506,8 +548,11 @@ class BuiltinRecorder(Recorder):
         from . import winjob
         winjob.guard(proc)
         speaker = None
+        playback_device = None
         if not self._stop.is_set():
             source = self.cfg.audio_source()
+            if source != "off":
+                playback_device = PlaybackDevice()
             if source == "desktop":
                 candidate = SpeakerBuffer(buffer_secs + 2 * seg_time)
                 if candidate.start():
@@ -521,6 +566,7 @@ class BuiltinRecorder(Recorder):
                 self._stderr = stderr
                 self._proc = proc
                 self._speaker = speaker
+                self._playback_device = playback_device
         if stopped:
             self._terminate(proc)
             stderr.close()
@@ -705,6 +751,7 @@ class BuiltinRecorder(Recorder):
         with self._lock:
             proc = self._proc
             speaker = self._speaker
+            playback_device = self._playback_device
             retained = max(0, math.ceil(self._retained_until - time.monotonic()))
         ready = self._stage == "ready" and proc is not None and proc.poll() is None
         source = self.cfg.audio_source()
@@ -716,10 +763,16 @@ class BuiltinRecorder(Recorder):
             if isinstance(speaker, ProcessAudioBuffer):
                 audio = "capturing" if speaker.ready.is_set() else "unavailable" if ready else "waiting"
                 audio_detail = speaker.detail
+        level, quiet = speaker.signal() if isinstance(speaker, AudioBuffer) else (0.0, False)
+        warning = ("Windows changed the default playback device. Check your audio in Recording settings."
+                   if playback_device and ready and playback_device.changed() else "")
+        if not warning and ready and audio == "capturing" and quiet:
+            warning = "No audio signal detected. Play sound in the selected source and check the meter."
         return {"backend": "builtin", "capturing": ready, "encoder": self._encoder, "fps": self._fps,
                 "cpu_encoding": ready and self._encoder == "libx264",
                 "method": self._method, "state": self._stage, "detail": self._detail, "audio": audio,
                 "audio_source": source, "audio_detail": audio_detail,
+                "audio_level": level, "audio_warning": warning,
                 "replay_available": ready or bool(retained), "replay_expires_in": retained,
                 "save_error": self._save_error}
 

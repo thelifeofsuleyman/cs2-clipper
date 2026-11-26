@@ -27,7 +27,7 @@ import uuid
 from pathlib import Path
 
 from . import media, paths, polish, uploaders
-from .clips import Catalog, Clip, ClipBudgetFull
+from .clips import Catalog, Clip, ClipBudgetFull, HighlightNotKept
 from .config import Config
 from .health import HealthMetrics
 from .log import log
@@ -244,6 +244,9 @@ class Engine:
         setting = self.cfg.get("engine.highlight_modes", "no_deathmatch")
         if setting == "off":
             return False
+        limit = self.cfg.mode_clip_limit(mode)
+        if limit is not None:
+            return limit > 0
         if setting == "competitive":
             return mode in COMPETITIVE_MODES
         return setting == "all" or mode != "deathmatch"
@@ -346,11 +349,13 @@ class Engine:
         with self._save_lock:
             saved = self._save_current_streak(token)
         if saved:
-            notice, generated, clip = saved
+            notice, generated, clip, limit = saved
             try:
-                self._publish_clip(*clip, generated=generated)
+                self._publish_clip(*clip, generated=generated, limit=limit)
             except ClipBudgetFull as exc:
                 self._finish_highlight_notice(notice, "skipped", str(exc))
+            except HighlightNotKept:
+                self._finish_highlight_notice(notice, "skipped", "Skipped a lower-ranked streak for this match.")
             except Exception as exc:
                 self.health.add(save_errors=1)
                 log(f"Could not add the highlight to the library: {exc}")
@@ -410,9 +415,15 @@ class Engine:
             self._finish_highlight_notice(notice, "skipped", "Too few kills were still in the replay buffer.")
             self._consume_pending(kills, generation, len(events))
             return
+        limit = self.cfg.mode_clip_limit(mode) if match.get("match_id") else None
+        if limit and not self.catalog.would_keep_highlight(match["match_id"], recent_kills, limit):
+            self._finish_highlight_notice(notice, "skipped", "Skipped a lower-ranked streak for this match.")
+            self._consume_pending(kills, generation, len(events))
+            return
         log(f"Saving highlight for {recent_kills} kill(s)")
         try:
-            self._check_clip_budget()
+            if not limit:
+                self._check_clip_budget()
             raw_tmp = self.clips_dir() / f".raw_{uuid.uuid4().hex[:8]}.mp4"
             ranges = highlight_ranges([stamp for stamp, _, _ in retained], *self.cfg.highlight_padding())
             clip_path, spans = self._record_replay(clip_seconds, raw_tmp, ranges)
@@ -439,7 +450,8 @@ class Engine:
 
         self._consume_pending(kills, generation, len(events))
         match["kill_markers"] = playback_markers(retained, spans)
-        return notice, clip_path == raw_tmp, (clip_path, recent_kills, map_name, round_n, side, steam_name, steam_id, match)
+        clip = (clip_path, recent_kills, map_name, round_n, side, steam_name, steam_id, match)
+        return notice, clip_path == raw_tmp, clip, limit
 
     def _replay_window(self) -> float:
         requested = float(self.cfg.get("recording.clip_seconds", 30))
@@ -449,13 +461,14 @@ class Engine:
         return max(requested, history, max(debounce, self.cfg.highlight_padding()[1]) + 2 * segment)
 
     def _publish_clip(self, clip_path: Path, kills: int, map_name: str, round_n: int,
-                      side: str, steam_name: str, steam_id: str, metadata: dict, *, generated=False) -> None:
+                      side: str, steam_name: str, steam_id: str, metadata: dict,
+                      *, generated=False, limit: int | None = None) -> None:
         # Produce a share-ready version (intro card + fades); fall back to raw.
         produced = clip_path
         try:
             polished = None
             prioritize_fps = self.cfg.get("recording.backend") == "builtin" and self.cfg.game_fps_priority()
-            if not prioritize_fps:
+            if not prioritize_fps and not limit:
                 polished = polish.polish_clip(self.cfg, clip_path, kills, map_name,
                                               steam_name, steam_id)
             if polished is not None:
@@ -470,13 +483,17 @@ class Engine:
         # Give it a human filename: <map>_<kills>  e.g. mirage_4K, inferno_ACE
         with self._file_lock:
             final = self._finalize_clip(produced, map_name, kills)
+        if limit and not generated and final == clip_path:
+            raise OSError("The OBS highlight could not be moved to the managed clip folder.")
         try:
-            clip = self._catalog_clip(final, kills, map_name, round_n, side, metadata=metadata)
-        except ClipBudgetFull:
-            if generated:
+            clip = self._catalog_clip(final, kills, map_name, round_n, side, metadata=metadata, limit=limit)
+        except (ClipBudgetFull, HighlightNotKept):
+            if generated or (limit and final != clip_path):
                 final.unlink(missing_ok=True)
             raise
         caption = format_caption(kills, map_name, round_n, side)
+        if limit:
+            return  # Ranked highlights can be shared manually while the ranking is changing.
         try:
             self.fan_out(clip, caption, automatic=True)
         except Exception as exc:
@@ -511,7 +528,7 @@ class Engine:
             raise ClipBudgetFull()
 
     def _catalog_clip(self, path: Path, kills, map_name, round_n, side, *, title=None, tags=None,
-                      metadata=None) -> Clip:
+                      metadata=None, limit: int | None = None) -> Clip:
         cid = f"{int(path.stat().st_mtime)}_{uuid.uuid4().hex[:6]}"
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         thumb = media.make_thumbnail(ffmpeg, path, cid)
@@ -531,8 +548,11 @@ class Engine:
             **(metadata or {}),
         )
         try:
-            self.catalog.add(clip, budget=self.cfg.clip_budget_bytes())
-        except OSError:
+            if limit:
+                self.catalog.add_ranked(clip, limit, budget=self.cfg.clip_budget_bytes())
+            else:
+                self.catalog.add(clip, budget=self.cfg.clip_budget_bytes())
+        except (OSError, HighlightNotKept):
             if thumb is not None:
                 thumb.unlink(missing_ok=True)
             raise

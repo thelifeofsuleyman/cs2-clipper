@@ -4,9 +4,11 @@ from __future__ import annotations
 import copy
 import json
 import re
+import tempfile
 import threading
 import uuid
 from pathlib import Path
+from zipfile import ZIP_STORED, ZipFile
 
 from . import media, paths
 from .log import log
@@ -176,6 +178,30 @@ class BatchExports:
             file = self._root / job_id / f"{index}{item['suffix']}"
             title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", item["title"]).strip(" .") or "Clip"
             return file, f"{title[:200]}-share{item['suffix']}"
+
+    def bundle(self, job_id: str):
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job or len(job["items"]) < 2 or any(item["state"] != "ready" for item in job["items"]):
+                return None
+            count = len(job["items"])
+        archive = tempfile.TemporaryFile()
+        try:
+            with ZipFile(archive, "w", compression=ZIP_STORED) as zipped:
+                for index in range(count):
+                    item = self.download(job_id, index)
+                    if not item:
+                        raise FileNotFoundError
+                    source, filename = item
+                    zipped.write(source, arcname=f"{index + 1:02d}-{filename}")
+            archive.seek(0)
+            return archive
+        except FileNotFoundError:
+            archive.close()
+            return None
+        except BaseException:
+            archive.close()
+            raise
 
     def remove(self, job_id: str) -> bool:
         with self._lock:

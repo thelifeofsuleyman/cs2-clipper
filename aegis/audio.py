@@ -12,6 +12,7 @@ from collections import deque
 from pathlib import Path
 
 from .log import log
+from .win_audio import default_playback_endpoint
 
 
 class AudioBuffer:
@@ -21,13 +22,27 @@ class AudioBuffer:
         self._samples: deque[tuple[float, bytes]] = deque()
         self._channels = channels
         self._rate = rate
+        self._meter_at = float("-inf")
+        self._peak = 0.0
+        self._last_signal = time.monotonic()
 
     def _append(self, start: float, data: bytes, now: float) -> None:
         with self._lock:
             if data:
                 self._samples.append((start, data))
+                if now - self._meter_at >= .15:
+                    pcm = memoryview(data).cast("h")
+                    self._peak = max(max(pcm), -min(pcm)) / 32768
+                    self._meter_at = now
+                    if self._peak >= .003:
+                        self._last_signal = now
             while self._samples and self._samples[0][0] < now - self._history:
                 self._samples.popleft()
+
+    def signal(self) -> tuple[float, bool]:
+        now = time.monotonic()
+        with self._lock:
+            return self._peak if now - self._meter_at < .4 else 0.0, now - self._last_signal > 4
 
     def write(self, spans: list[tuple[float, float]], path: Path) -> None:
         """Write audio for the selected video spans and fill gaps with silence."""
@@ -226,3 +241,48 @@ class ProcessAudioBuffer(AudioBuffer):
         with self._lifecycle:
             self._closed = True
             self._stop_stream()
+
+
+class PlaybackDevice:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._endpoint = default_playback_endpoint()
+        self._last_check = time.monotonic()
+        self._changed = False
+
+    def changed(self) -> bool:
+        with self._lock:
+            now = time.monotonic()
+            if not self._changed and now - self._last_check >= 5:
+                self._last_check = now
+                current = default_playback_endpoint()
+                if self._endpoint is None:
+                    self._endpoint = current
+                else:
+                    self._changed = current != self._endpoint
+            return self._changed
+
+
+def capture_preview(source: str, destination: Path, seconds: float = 3) -> None:
+    if sys.platform != "win32":
+        raise ValueError("Audio preview requires Windows.")
+    if source == "desktop":
+        buffer = SpeakerBuffer(seconds + 2)
+        if not buffer.start():
+            raise ValueError("RoundLatch could not open the default playback device.")
+    elif source == "cs2":
+        from .winprocess import process_id
+
+        buffer = ProcessAudioBuffer(seconds + 2)
+        buffer.refresh(process_id("cs2.exe"))
+        if not buffer.ready.wait(3):
+            buffer.stop()
+            raise ValueError(buffer.detail or "Open CS2 before previewing its audio.")
+    else:
+        raise ValueError("Select an audio source first.")
+    try:
+        start = time.monotonic()
+        time.sleep(seconds)
+        buffer.write([(start, start + seconds)], destination)
+    finally:
+        buffer.stop()

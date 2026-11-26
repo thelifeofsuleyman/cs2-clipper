@@ -110,6 +110,16 @@ class _WindowApi:
         selected = self._window.create_file_dialog(FileDialog.FOLDER)
         return selected[0] if selected else ""
 
+    def choose_library_backup(self, create: bool):
+        from webview import FileDialog
+
+        selected = self._window.create_file_dialog(
+            FileDialog.SAVE if create else FileDialog.OPEN,
+            save_filename="RoundLatch-library.zip" if create else "",
+            file_types=("RoundLatch library backups (*.zip)",),
+        )
+        return selected[0] if selected else ""
+
     def _choose_close(self, tray_available: bool) -> None:
         # WebView2 completes ExecuteScriptAsync on the WinForms UI thread.
         # Calling evaluate_js in the synchronous closing handler freezes it.

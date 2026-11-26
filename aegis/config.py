@@ -34,6 +34,9 @@ DEFAULTS: dict[str, Any] = {
         "debounce_sec": 7.0,     # seconds of no-kill before a streak is clipped
         "min_kills": 1,          # 2 = skip solo kills
         "highlight_modes": "no_deathmatch",
+        "premier_clip_limit": -1,
+        "competitive_clip_limit": -1,
+        "deathmatch_clip_limit": -1,
         "highlight_window": "standard",
         "highlight_before": 2.0,
         "highlight_after": 1.0,
@@ -46,7 +49,8 @@ DEFAULTS: dict[str, Any] = {
         "preset": "medium",            # see recorder.PRESETS
         "fps": 0,                      # 0 = use the preset's fps
         "encoder": "auto",             # auto | nvenc | amf | qsv | x264
-        "capture": "ddagrab",          # ddagrab (fullscreen-safe) | gdigrab
+        "capture": "ddagrab",          # desktop capture method
+        "window_only": False,
         "prioritize_game_fps": True,   # direct GPU capture and lighter in-game processing
         "speaker_audio": False,        # opt in to recording the default playback device
         "audio_source": "",             # blank inherits speaker_audio from older settings
@@ -133,9 +137,12 @@ class Config:
 
     def audio_source(self) -> str:
         source = self.get("recording.audio_source", "")
-        if source in ("off", "desktop", "cs2"):
-            return source
-        return "desktop" if not source and self.get("recording.speaker_audio") is True else "off"
+        if source not in ("off", "desktop", "cs2"):
+            source = "desktop" if not source and self.get("recording.speaker_audio") is True else "off"
+        return "off" if source == "desktop" and self.window_capture() else source
+
+    def window_capture(self) -> bool:
+        return self.get("recording.backend") == "builtin" and self.get("recording.window_only") is True
 
     def highlight_padding(self) -> tuple[float, float]:
         mode = self.get("engine.highlight_window")
@@ -148,6 +155,12 @@ class Config:
                     and type(after) in (int, float) and 0.5 <= after <= 10):
                 return float(before), float(after)
         return 2.0, 1.0
+
+    def mode_clip_limit(self, mode: str) -> int | None:
+        if mode not in ("premier", "competitive", "deathmatch"):
+            return None
+        value = self.get(f"engine.{mode}_clip_limit", -1)
+        return value if type(value) is int and 0 <= value <= 20 else None
 
     def game_fps_priority(self) -> bool:
         return (bool(self.get("recording.prioritize_game_fps", True))

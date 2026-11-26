@@ -229,6 +229,7 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   <nav aria-label="Main navigation">
     <button class=rail-item data-tab=clips aria-pressed=true>%FILM_ICON% Clip library</button>
     <button class=rail-item data-tab=matches aria-pressed=false><svg class=ico viewBox="0 0 24 24" aria-hidden=true><path d="M4 6h16M4 12h16M4 18h10"/></svg> Matches</button>
+    <button class=rail-item data-tab=collections aria-pressed=false><svg class=ico viewBox="0 0 24 24" aria-hidden=true><path d="M3 7h7l2 2h9v11H3z"/></svg> Collections</button>
     <button class=rail-item data-tab=favorites aria-pressed=false>%STAR_ICON% Favorites</button>
     <button class=rail-item data-tab=logs aria-pressed=false>%ACTIVITY_ICON% Activity</button>
     <a class=rail-item href="/setup">%SETTINGS_ICON% Settings</a>
@@ -268,6 +269,8 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
     <span>Recording is using the CPU. If CS2 slows down, try Low impact capture.</span>
     <a class=settings-link href="/setup#recording">Recording settings</a>
   </div>
+  <div class=storage-warning id=audioWarning hidden><span id=audioWarningText role=status></span>
+    <a class=settings-link href="/setup#recording">Recording audio</a></div>
   <section class=app-health id=verifyReplay hidden aria-labelledby=verifyHeading>
     <h2 id=verifyHeading>Check your first replay</h2>
     <ol>
@@ -296,6 +299,8 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
       <div class=library-tools>
         <label class=search>%SEARCH_ICON%<input type=search id=clipSearch aria-label="Search clips" placeholder="Search clips"></label>
         <select id=clipFilter aria-label="Filter clips"><option value=all>All clips</option><option value=test>Test clips</option></select>
+        <select id=collectionFilter aria-label="Choose a collection" hidden></select>
+        <button id=selectCollection hidden>Select for export</button>
         <select id=clipSort aria-label="Sort clips"><option value=newest>Newest first</option><option value=largest>Largest first</option></select>
         <button id=openDeleted>Recently deleted</button>
       </div>
@@ -376,6 +381,15 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   <p id=deletedStatus role=status></p>
   <button id=closeDeleted>Close</button>
 </dialog>
+<dialog class=dialog id=collectionDialog aria-labelledby=collectionTitle>
+  <h3 id=collectionTitle>Clip collections</h3>
+  <p id=collectionClipTitle></p>
+  <fieldset id=collectionChoices><legend>Collections</legend></fieldset>
+  <label for=newCollection>New collection name</label>
+  <input id=newCollection maxlength=60 placeholder="Premier wins">
+  <p id=collectionStatus role=status></p>
+  <div class=dialog-actions><button id=closeCollection>Cancel</button><button class=primary id=saveCollection>Save collections</button></div>
+</dialog>
 <dialog class=dialog id=shareDialog aria-labelledby=shareTitle>
   <h3 id=shareTitle>Share clip</h3>
   <p id=shareName></p>
@@ -419,6 +433,8 @@ let batchFingerprint = '';
 let batchRequest = 0;
 let playerTrigger, playerClipId, playerGeneration = 0, previewEnd;
 let shareId, shareGeneration = 0, shareUrl, shareWindow, shareTargets = false;
+let collectionClip;
+const exportsPage = () => activePage === 'matches' || activePage === 'collections';
 const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
   '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
 }[ch]));
@@ -435,14 +451,17 @@ function openTab(tab) {
   const previous = activePage;
   activePage = tab;
   for (const b of $$('.rail button[data-tab]')) b.setAttribute('aria-pressed', b.dataset.tab === tab);
-  $('#pageTitle').textContent = {clips:'Clip library', matches:'Matches', favorites:'Favorites', logs:'Activity'}[tab];
+  $('#pageTitle').textContent = {clips:'Clip library', matches:'Matches', collections:'Collections',
+    favorites:'Favorites', logs:'Activity'}[tab];
   $('section[data-panel=clips]').hidden = tab === 'logs';
   $('section[data-panel=logs]').hidden = tab !== 'logs';
-  $('#clipFilter').hidden = tab === 'matches';
+  $('#clipFilter').hidden = exportsPage();
+  $('#collectionFilter').hidden = tab !== 'collections';
+  $('#selectCollection').hidden = tab !== 'collections';
   $('#clipSort').hidden = tab === 'matches';
-  $('#batchJobs').hidden = tab !== 'matches' || !$('#batchJobs').childElementCount;
+  $('#batchJobs').hidden = !exportsPage() || !$('#batchJobs').childElementCount;
   renderBatchSelection();
-  if (tab === 'matches') loadBatchJobs();
+  if (exportsPage()) loadBatchJobs();
   if (tab === 'logs') loadLogs();
   else if (previous !== tab) {
     $('#clipSearch').value = '';
@@ -458,9 +477,13 @@ async function loadStatus() {
   $('#sendClip').hidden = Boolean(shareWindow) || !shareTargets;
   const rec = s.recorder || {};
   $('#cpuCaptureWarning').hidden = !rec.cpu_encoding;
+  const audioWarning = rec.audio_warning || '';
+  if ($('#audioWarningText').textContent !== audioWarning) $('#audioWarningText').textContent = audioWarning;
+  $('#audioWarning').hidden = !audioWarning;
   renderReplayCheck(s);
   const replay = $('#saveReplay');
   const states = {
+    paused_window: ['Capture paused', 'Switch to the CS2 window to resume recording.'],
     waiting_game: ['Waiting for CS2', 'Open Counter-Strike 2 to start the rolling replay buffer.'],
     starting: ['Starting capture', 'RoundLatch is preparing the replay buffer.'],
     error: ['Capture unavailable', rec.detail || 'Open Activity to see recording errors.'],
@@ -468,7 +491,8 @@ async function loadStatus() {
   };
   const retained = s.replay_available && !s.capturing;
   const status = s.error ? ['RoundLatch disconnected', s.error] : retained
-    ? ['Last replay available', 'Save your last replay before the buffer expires in ' + rec.replay_expires_in + 's.']
+    ? ['Last replay available', 'Save your last replay before the buffer expires in ' + rec.replay_expires_in + 's.' +
+        (rec.state === 'paused_window' ? ' Focus CS2 to resume capture.' : '')]
     : s.capturing
     ? ['Replay buffer ready', s.gsi_connected
       ? (s.automatic_highlights === false ? 'Automatic highlights are off. You can still save replays.'
@@ -588,12 +612,22 @@ function renderClips() {
   const filter = $('#clipFilter').value;
   const favorites = activePage === 'favorites';
   const matches = activePage === 'matches';
-  const scope = favorites ? library.filter(c => c.favorite) : matches ? library.filter(c => c.match_id) : library;
+  const collections = activePage === 'collections';
+  const chooser = $('#collectionFilter');
+  if (collections) {
+    const current = chooser.value;
+    const names = allCollections();
+    chooser.replaceChildren(...names.map(name => new Option(name, name)));
+    if (names.includes(current)) chooser.value = current;
+  }
+  const scope = favorites ? library.filter(c => c.favorite) : matches ? library.filter(c => c.match_id) :
+    collections ? library.filter(c => c.collections?.includes(chooser.value)) : library;
   const clips = scope.filter(c => {
     const tags = Array.isArray(c.tags) ? c.tags : [];
-    return (matches || filter === 'all' || tags.includes('test')) &&
-      (!query || [c.title, c.map, c.match_mode, ...tags].join(' ').toLowerCase().includes(query));
+    return (exportsPage() || filter === 'all' || tags.includes('test')) &&
+      (!query || [c.title, c.map, c.match_mode, ...tags, ...(c.collections || [])].join(' ').toLowerCase().includes(query));
   });
+  $('#selectCollection').disabled = !scope.some(c => !c.missing);
   if (!matches && $('#clipSort').value === 'largest') {
     clips.sort((a, b) => (b.size_bytes ?? -1) - (a.size_bytes ?? -1));
   }
@@ -602,14 +636,15 @@ function renderClips() {
     (combinedSize ? ' · ' + fileSize(combinedSize) : '');
   const g = $('#clipGrid');
   if (!clips.length) {
-    const title = scope.length ? 'No matching clips' : matches ? 'No match clips yet' :
+    const title = scope.length ? 'No matching clips' : collections ? 'No collections yet' : matches ? 'No match clips yet' :
       favorites ? 'No favorites yet' : 'Your clips will appear here';
-    const detail = scope.length ? 'Try another search or filter.' : matches ?
+    const detail = scope.length ? 'Try another search or filter.' : collections ?
+      'Open a clip’s collections menu in the library to create a collection.' : matches ?
       'Clips saved during a connected CS2 match appear here by map and round.' :
       favorites ? 'Star a clip to find it here later.' :
       'Play CS2 to capture highlights automatically, or save a replay while the buffer is ready.';
     g.innerHTML = '<div class=empty><span class=empty-symbol>' + ic(favorites ? 'star' : 'film') + '</span><strong>' + title +
-      '</strong><div class=sub>' + detail + '</div>' + (!favorites && !matches && !scope.length ?
+      '</strong><div class=sub>' + detail + '</div>' + (!favorites && !exportsPage() && !scope.length ?
         '<a href="/setup#capture-test">Test your recording setup</a>' : '') + '</div>';
     return;
   }
@@ -661,12 +696,14 @@ function clipCard(c) {
       title + '">' + title + '</div><div class=meta>' + escape(c.map) +
       '<span class=sep></span>' + (c.missing ? 'File missing' : fileSize(c.size_bytes || 0)) + '</div>' +
       (targets ? '<div class=targets>' + targets + '</div>' : '') +
-      (activePage === 'matches' ? '<label class=batch-picker><input type=checkbox data-batch-select' +
+      (exportsPage() ? '<label class=batch-picker><input type=checkbox data-batch-select' +
         (selectedForExport.has(c.id) ? ' checked' : '') + (c.missing ? ' disabled' : '') +
         ' aria-label="Select ' + title + ' for export">Select for export</label>' : '') +
       '<div class=actions><button class="btn-icon fav ' + (c.favorite ? 'on' : '') +
       '" data-fav aria-pressed="' + Boolean(c.favorite) + '" aria-label="Favorite" title="Favorite">' + ic('star') +
-      '</button><span class=spacer></span><button class=btn-icon aria-label="Share" title="Share" data-share' +
+      '</button><button class=btn-icon aria-label="Edit collections" title="Collections" data-collection>' +
+      '<svg class=ico viewBox="0 0 24 24" aria-hidden=true><path d="M3 7h7l2 2h9v11H3z"/></svg></button>' +
+      '<span class=spacer></span><button class=btn-icon aria-label="Share" title="Share" data-share' +
       (c.missing ? ' disabled' : '') + '>' + ic('share') +
       '</button><button class="btn-icon danger" aria-label="Delete" title="Delete" data-delete>' + ic('trash') +
       '</button></div></div></article>';
@@ -674,6 +711,7 @@ function clipCard(c) {
 
 function bindCard(card) {
   const id = card.dataset.id;
+  card.querySelector('[data-collection]').onclick = () => openCollections(id);
   const batchPick = card.querySelector('[data-batch-select]');
   if (batchPick) batchPick.onchange = () => {
     if (batchPick.checked && selectedForExport.size >= %MAX_EXPORT_CLIPS%) {
@@ -722,6 +760,54 @@ function bindCard(card) {
     });
   };
 }
+
+function allCollections() {
+  return [...new Set(library.flatMap(clip => clip.collections || []))].sort((a, b) => a.localeCompare(b));
+}
+function openCollections(id) {
+  const clip = library.find(c => c.id === id);
+  if (!clip) return;
+  collectionClip = id;
+  $('#collectionClipTitle').textContent = clip.title || 'Untitled';
+  $('#newCollection').value = '';
+  $('#collectionStatus').textContent = '';
+  const choices = $('#collectionChoices');
+  for (const label of choices.querySelectorAll('label')) label.remove();
+  for (const name of allCollections()) {
+    const label = document.createElement('label');
+    label.className = 'batch-picker';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.value = name;
+    box.checked = clip.collections?.includes(name) || false;
+    label.append(box, name);
+    choices.append(label);
+  }
+  choices.hidden = !choices.querySelector('input');
+  $('#collectionDialog').showModal();
+}
+$('#closeCollection').onclick = () => $('#collectionDialog').close();
+$('#saveCollection').onclick = () => busy($('#saveCollection'), 'Saving…', async () => {
+  const collections = $$('#collectionChoices input:checked').map(box => box.value);
+  const name = $('#newCollection').value.trim();
+  if (name) collections.push(allCollections().find(existing => existing.toLowerCase() === name.toLowerCase()) || name);
+  const result = await api(clipApi(collectionClip), jsonPost({collections}));
+  if (result.error) { $('#collectionStatus').textContent = result.error; return; }
+  $('#collectionDialog').close();
+  await loadClips(true);
+});
+$('#collectionFilter').onchange = renderClips;
+$('#selectCollection').onclick = () => {
+  const ids = library.filter(c => !c.missing && c.collections?.includes($('#collectionFilter').value)).map(c => c.id);
+  if (ids.length > %MAX_EXPORT_CLIPS%) {
+    toast('Choose up to %MAX_EXPORT_CLIPS% clips for a batch.');
+    return;
+  }
+  selectedForExport.clear();
+  for (const id of ids) selectedForExport.add(id);
+  renderBatchSelection();
+  renderClips();
+};
 
 let lastDeleted;
 function changeDeletedClip(id, action) {
@@ -773,7 +859,7 @@ $('#undoDelete').onclick = () => busy($('#undoDelete'), '', async () => {
 
 function renderBatchSelection() {
   const count = selectedForExport.size;
-  $('#batchSelection').hidden = activePage !== 'matches' || count === 0;
+  $('#batchSelection').hidden = !exportsPage() || count === 0;
   $('#batchCount').textContent = count + (count === 1 ? ' clip selected' : ' clips selected');
 }
 
@@ -783,7 +869,7 @@ async function loadBatchJobs() {
   if (seq !== batchRequest || data.error) return;
   const panel = $('#batchJobs');
   const version = JSON.stringify(data.jobs);
-  panel.hidden = activePage !== 'matches' || !data.jobs.length;
+  panel.hidden = !exportsPage() || !data.jobs.length;
   if (version === batchFingerprint) return;
   batchFingerprint = version;
   const labels = {queued:'Waiting for a break in CS2', working:'Preparing…', error:'Export failed'};
@@ -797,8 +883,10 @@ async function loadBatchJobs() {
       }
       return '<li>' + name + ' <span>· ' + escape(item.error || labels[item.state]) + '</span></li>';
     }).join('');
-    return '<div class=batch-job><div><strong>' + job.max_mb + ' MB per clip</strong><ul>' + rows +
-      '</ul></div><button data-remove-batch="' + id + '"' +
+    const zip = job.items.length > 1 && job.items.every(item => item.state === 'ready') ?
+      '<a class=settings-link href="/exports/' + id + '/zip">Download batch ZIP</a>' : '';
+    return '<div class=batch-job><div><strong>' + job.max_mb + ' MB per clip</strong><ul>' + rows + '</ul>' + zip +
+      '</div><button data-remove-batch="' + id + '"' +
       (job.items.some(item => item.state === 'working') ? ' disabled' : '') + '>Remove batch</button></div>';
   }).join('') : '';
   for (const button of panel.querySelectorAll('[data-remove-batch]')) {
@@ -1210,7 +1298,7 @@ function refreshVisibleDashboard() {
   if (activePage === 'logs') loadLogs();
   else {
     loadClips();
-    if (activePage === 'matches') loadBatchJobs();
+    if (exportsPage()) loadBatchJobs();
   }
 }
 window.__roundLatchVisible = visible => {
@@ -1226,7 +1314,7 @@ setInterval(() => {
   if (activePage === 'logs') loadLogs();
   else {
     if (!$('#clipGrid').contains(document.activeElement)) loadClips();
-    if (activePage === 'matches') loadBatchJobs();
+    if (exportsPage()) loadBatchJobs();
   }
 }, 5000);
 </script></body></html>"""
@@ -1305,8 +1393,17 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
     </div>
     <div id=builtinFields>
     <div class=row><label for=rec_clip>Manual replay length<small>Seconds saved by Save replay.</small></label><input type=number id=rec_clip min=5 max=120 value=30></div>
+    <div class=row><label for=rec_window>Capture only the CS2 window<small>Pauses when you switch away. Use CS2-only audio to keep other apps out of recordings.</small></label>
+      <input type=checkbox id=rec_window></div>
     <div class=row><label for=audio_source>Recording audio<small>CS2 only uses Windows 11 process audio. Desktop captures sounds from the default playback device.</small></label>
       <select id=audio_source><option value=off>Off</option><option value=cs2>CS2 only</option><option value=desktop>Desktop audio</option></select></div>
+    <div class=row id=audioControls hidden>
+      <div><label for=audioMeter>Live audio level</label><p class=hint id=audioStatus role=status></p></div>
+      <div><meter id=audioMeter min=0 max=1 value=0></meter>
+        <button id=previewAudio>Record audio preview</button>
+        <audio id=audioPreviewPlayer controls hidden></audio>
+        <p id=audioPreviewStatus role=status></p></div>
+    </div>
     <div class=row><label for=rec_compact>Compact recording<small>Uses less video bitrate while keeping the recording resolution and frame rate. Fine detail can change.</small></label><input type=checkbox id=rec_compact></div>
     <div class=row><label for=rec_performance>Prioritize game FPS<small>Records at up to 30 FPS, uses the GPU directly when supported, and skips highlight effects.</small></label><input type=checkbox id=rec_performance checked></div>
     <div class=row><label for=rec_gate>Capture only while CS2 is open</label><input type=checkbox id=rec_gate checked></div>
@@ -1337,6 +1434,19 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
       <input id=clipBudget type=number min=0 max=4096 step=1 value=0></div>
     <p class=hint id=budgetUsage></p>
     <details>
+      <summary>Back up or restore the library</summary>
+      <p class=hint>Save titles, favorites, tags, and collections to a ZIP. Include videos if you want to move them to another PC.</p>
+      <div class=row><label for=backupPath>Backup ZIP path</label><input id=backupPath spellcheck=false></div>
+      <div class=dialog-actions><button id=chooseBackupOutput hidden>Choose backup location</button>
+        <button id=chooseBackupInput hidden>Choose existing backup</button></div>
+      <div class=row><label for=backupVideos>Include videos when creating a backup</label>
+        <input id=backupVideos type=checkbox></div>
+      <div class=row><label for=restoreFolder>Restore videos to<small>Leave blank to use your clip folder. For metadata-only backups, choose the folder that holds the original videos.</small></label>
+        <input id=restoreFolder spellcheck=false></div>
+      <div class=dialog-actions><button id=createBackup>Create backup</button><button id=restoreBackup>Restore backup</button></div>
+      <p id=backupStatus role=status></p>
+    </details>
+    <details>
       <summary>Reconnect moved clips</summary>
       <p class=hint>Enter the old and new folder paths. RoundLatch reconnects missing videos with matching filenames and subfolders.</p>
       <div class=row><label for=oldClipFolder>Original folder</label><input id=oldClipFolder spellcheck=false></div>
@@ -1365,6 +1475,16 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
       <option value=all>All modes</option>
       <option value=off>Off · manual replays only</option>
     </select></div>
+    <details>
+      <summary>Clip limits by match mode</summary>
+      <p class=hint>Use −1 to follow the setting above, 0 to skip a mode, or a positive number to keep the highest-kill highlights per match. A stronger clip can replace a lower-ranked one. Favorites and collection clips are kept. Share ranked highlights manually.</p>
+      <div class=row><label for=limit_premier>Premier clips per match</label>
+        <input id=limit_premier type=number min=-1 max=20 step=1 value=-1></div>
+      <div class=row><label for=limit_competitive>Competitive clips per match</label>
+        <input id=limit_competitive type=number min=-1 max=20 step=1 value=-1></div>
+      <div class=row><label for=limit_deathmatch>Deathmatch clips per match</label>
+        <input id=limit_deathmatch type=number min=-1 max=20 step=1 value=-1></div>
+    </details>
     <div class=row><label for=highlight_window>Footage around each kill<small id=highlightWindowHelp></small></label>
       <select id=highlight_window><option value=standard>Standard</option><option value=competitive>Competitive</option>
         <option value=custom>Custom</option></select></div>
@@ -1423,6 +1543,7 @@ function showSettingsSection(section) {
     else link.removeAttribute('aria-current');
   }
   if (section === 'storage') refreshClipBudget();
+  if (section === 'recording') refreshAudio();
 }
 window.addEventListener('hashchange', () => showSettingsSection(location.hash.slice(1)));
 function message(id, text, type = '') {
@@ -1454,6 +1575,7 @@ async function loadExisting() {
   $('#rec_preset').value = r.preset || 'medium';
   $('#rec_performance').checked = r.prioritize_game_fps !== false;
   $('#audio_source').value = r.audio_source || (r.speaker_audio ? 'desktop' : 'off');
+  $('#rec_window').checked = r.window_only === true;
   $('#rec_compact').checked = Boolean(r.compact_video);
   $('#clips_dir').value = (c.storage || {}).clips_dir || '';
   $('#clipBudget').value = c.storage?.budget_gib ?? 0;
@@ -1467,6 +1589,9 @@ async function loadExisting() {
   $('#debounce').value = e.debounce_sec ?? 7;
   $('#minkills').value = e.min_kills ?? 1;
   $('#highlight_modes').value = e.highlight_modes || 'no_deathmatch';
+  for (const mode of ['premier', 'competitive', 'deathmatch']) {
+    $('#limit_' + mode).value = e[mode + '_clip_limit'] ?? -1;
+  }
   $('#highlight_window').value = e.highlight_window || 'standard';
   $('#highlight_before').value = e.highlight_before ?? 2;
   $('#highlight_after').value = e.highlight_after ?? 1;
@@ -1497,11 +1622,15 @@ function readSettings() {
     hotkeys:{replay:$('#replay_hotkey').value},
     engine:{debounce_sec:$('#debounce').valueAsNumber, min_kills:$('#minkills').valueAsNumber,
       highlight_modes:$('#highlight_modes').value,
+      premier_clip_limit:$('#limit_premier').valueAsNumber,
+      competitive_clip_limit:$('#limit_competitive').valueAsNumber,
+      deathmatch_clip_limit:$('#limit_deathmatch').valueAsNumber,
       highlight_window:$('#highlight_window').value,
       highlight_before:custom || before.value && before.checkValidity() ? before.valueAsNumber : savedSettings?.engine.highlight_before ?? 2,
       highlight_after:custom || after.value && after.checkValidity() ? after.valueAsNumber : savedSettings?.engine.highlight_after ?? 1,
       cs2_cfg_dir:$('#cs2_cfg_dir').value.trim()},
     recording:{backend, preset:$('#rec_preset').value,
+      window_only:$('#rec_window').checked,
       prioritize_game_fps:$('#rec_performance').checked,
       audio_source:$('#audio_source').value,
       compact_video:$('#rec_compact').checked,
@@ -1528,11 +1657,17 @@ function renderSettings(status, type) {
   const prioritize = ($('#rec_performance').checked || gpuOnly || light) && !obs;
   $('#builtinFields').hidden = obs;
   $('#obsFields').hidden = !obs;
-  $('#captureBtn').hidden = obs;
+  const windowOnly = !obs && $('#rec_window').checked;
+  $('#captureBtn').hidden = obs || windowOnly;
+  $('#rec_gate').disabled = windowOnly;
+  $('#audio_source').querySelector('option[value="desktop"]').disabled = windowOnly;
+  if (windowOnly && $('#audio_source').value === 'desktop') $('#audio_source').value = 'off';
+  $('#audioControls').hidden = obs || $('#audio_source').value === 'off';
   $('#qualityHint').textContent = light ? 'Caps capture at 540p and 24 FPS and skips highlight effects.' :
     gpuOnly ? 'Uses native resolution and requires direct GPU capture.' :
     prioritize ? 'Direct GPU capture uses desktop resolution and runs at up to 30 FPS.' : '';
   $('#testHelp').textContent = obs ? 'Start Replay Buffer in OBS, then use Save replay in the library. A sample clip checks playback.' :
+    windowOnly ? 'Focus CS2 and press your replay shortcut to test window capture.' :
     'Check five seconds of screen video outside a match. To check speaker audio, use Save replay while CS2 is open and playing sound.';
   $('#polish_en').disabled = prioritize;
   $('#effectsHint').textContent = prioritize ? 'Paused while Prioritize game FPS is on.' : '';
@@ -1559,7 +1694,8 @@ async function save() {
     message('#saveOut', 'Enter a whole-number storage budget between 0 and 4096 GiB.', 'err');
     return false;
   }
-  const required = [obs ? '#obs_port' : '#rec_clip', '#debounce', '#minkills'];
+  const required = [obs ? '#obs_port' : '#rec_clip', '#debounce', '#minkills',
+    '#limit_premier', '#limit_competitive', '#limit_deathmatch'];
   if (snapshot.engine.highlight_window === 'custom') required.push('#highlight_before', '#highlight_after');
   for (const field of required) {
     const input = $(field);
@@ -1567,6 +1703,8 @@ async function save() {
       const section = input.closest('[data-settings-panel]').id;
       history.replaceState(null, '', '#' + section);
       showSettingsSection(section);
+      const details = input.closest('details');
+      if (details) details.open = true;
       input.focus();
       message('#saveOut', 'Check ' + input.labels[0].childNodes[0].textContent.trim().toLowerCase() + ' (' + input.min + '–' + input.max + ').', 'err');
       return false;
@@ -1628,7 +1766,57 @@ $('#clearHotkey').onclick = () => {
 };
 function enableFolderPicker() {
   $('#browseClips').hidden = !window.pywebview?.api?.choose_clips_folder;
+  $('#chooseBackupOutput').hidden = $('#chooseBackupInput').hidden = !window.pywebview?.api?.choose_library_backup;
 }
+let audioPreviewUrl, settingsBackgrounded = false;
+window.__roundLatchVisible = visible => {
+  settingsBackgrounded = !visible;
+  if (visible) refreshAudio();
+};
+function clearAudioPreview() {
+  const player = $('#audioPreviewPlayer');
+  player.pause();
+  player.removeAttribute('src');
+  player.hidden = true;
+  $('#audioPreviewStatus').textContent = '';
+  if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
+  audioPreviewUrl = undefined;
+}
+async function refreshAudio() {
+  if (document.hidden || settingsBackgrounded || $('#recording').hidden || $('#audioControls').hidden) return;
+  const result = await api('/api/audio-status');
+  if (result.error || $('#audioControls').hidden || $('#recording').hidden) return;
+  const matching = result.source === $('#audio_source').value;
+  $('#audioMeter').value = matching ? result.level : 0;
+  const text = !matching ? 'Save this audio source to see its live level. You can preview it now.' :
+    result.warning || (result.state === 'capturing' ? 'Listening to the selected audio source.' :
+    'The live meter starts with the recorder. Use the preview to check sound now.');
+  if ($('#audioStatus').textContent !== text) $('#audioStatus').textContent = text;
+}
+$('#audio_source').onchange = () => { clearAudioPreview(); refreshAudio(); };
+$('#previewAudio').onclick = () => busy($('#previewAudio'), 'Recording three seconds…', async () => {
+  clearAudioPreview();
+  const source = $('#audio_source').value;
+  $('#audioPreviewStatus').textContent = 'Play sound in the selected source now.';
+  try {
+    const response = await apiFetch('/api/audio-preview', jsonPost({source}), 16000);
+    if (!response.ok) {
+      const failure = await response.json();
+      $('#audioPreviewStatus').textContent = failure.error || 'Could not record an audio preview.';
+      return;
+    }
+    const sound = await response.blob();
+    if (source !== $('#audio_source').value) return;
+    audioPreviewUrl = URL.createObjectURL(sound);
+    const player = $('#audioPreviewPlayer');
+    player.src = audioPreviewUrl;
+    player.hidden = false;
+    $('#audioPreviewStatus').textContent = 'Play the preview to check the sound.';
+  } catch {
+    $('#audioPreviewStatus').textContent = 'Could not record an audio preview.';
+  }
+});
+setInterval(refreshAudio, 500);
 async function refreshClipBudget() {
   const data = await api('/api/clip-storage');
   const gib = bytes => (bytes / (1024 ** 3)).toLocaleString([], {maximumFractionDigits:2});
@@ -1642,6 +1830,26 @@ $('#reconnectClips').onclick = () => busy($('#reconnectClips'), 'Checking…', a
     (result.count ? 'Reconnected ' + result.count + (result.count === 1 ? ' clip.' : ' clips.') : 'No matching clips found.');
   if (result.ok) refreshClipBudget();
 });
+for (const [id, create] of [['chooseBackupOutput', true], ['chooseBackupInput', false]]) {
+  $('#' + id).onclick = () => busy($('#' + id), '', async () => {
+    const path = await window.pywebview.api.choose_library_backup(create);
+    if (path) $('#backupPath').value = path;
+  });
+}
+for (const [id, action] of [['createBackup', 'create'], ['restoreBackup', 'restore']]) {
+  $('#' + id).onclick = () => busy($('#' + id), action === 'create' ? 'Backing up…' : 'Restoring…', async () => {
+    $('#backupStatus').textContent = action === 'create' ? 'Writing the ZIP backup…' : 'Reading the ZIP backup…';
+    const result = await api('/api/library-backup',
+      jsonPost({action, path:$('#backupPath').value.trim(), videos:$('#backupVideos').checked,
+        folder:$('#restoreFolder').value.trim()}), 900000);
+    if (result.error) { $('#backupStatus').textContent = result.error; return; }
+    const count = result.clips + (result.clips === 1 ? ' clip' : ' clips');
+    $('#backupStatus').textContent = (action === 'create' ? 'Backed up ' : 'Restored ') + count +
+      ' · ' + result.videos + (result.videos === 1 ? ' video' : ' videos') +
+      (result.missing ? ' · ' + result.missing + ' missing videos' : '');
+    if (action === 'restore') refreshClipBudget();
+  });
+}
 window.addEventListener('pywebviewready', enableFolderPicker);
 enableFolderPicker();
 $('#browseClips').onclick = () => runSettings($('#browseClips'), 'Choosing…', async () => {
