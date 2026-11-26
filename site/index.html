@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoundLatch · Automatic CS2 Clip Recorder for Windows</title>
+  <meta name="description" content="Download RoundLatch, an open-source CS2 clip recorder for Windows. Set up automatic highlights, save a replay with a hotkey, and review clips by match.">
+  <meta property="og:title" content="RoundLatch · CS2 Clip Recorder">
+  <meta property="og:description" content="Automatic highlights, manual replays, and a local clip library for Counter-Strike 2.">
+  <link rel="icon" href="roundlatch.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="fps.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="wrap top">
+  <a class="brand" href="./"><img src="roundlatch.svg" width="32" height="32" alt="">RoundLatch</a>
+  <nav aria-label="Main navigation"><a href="#install">Setup</a><a href="#performance">FPS calculator</a><a href="#help">Help</a><a href="https://github.com/thelifeofsuleyman/cs2-clipper">GitHub</a></nav>
+</header>
+<main class="wrap" id="main">
+  <section class="hero">
+    <div>
+      <p class="platform">Counter-Strike 2 / Windows</p>
+      <h1>CS2 clips, <span>saved locally.</span></h1>
+      <p class="intro">Capture kills automatically or save the last play with a hotkey. Find, trim, and export your clips from a library on your PC.</p>
+      <div class="downloads">
+        <a class="button" href="https://github.com/thelifeofsuleyman/cs2-clipper/releases/latest">Download for Windows</a>
+      </div>
+      <p class="muted">Installer and portable ZIP available on GitHub. Previously called Aegis Clipper.</p>
+    </div>
+    <figure class="product">
+      <img src="library-preview.png" width="1100" height="620" alt="RoundLatch clip library showing sample clips, with links to Matches, Favorites, Activity, and Settings.">
+      <figcaption>RoundLatch clip library with sample clips</figcaption>
+    </figure>
+  </section>
+  <section class="workflow" aria-labelledby="workflow-title">
+    <h2 id="workflow-title">Capture, review, and share</h2>
+    <div class="feature-grid">
+      <article><h3>Save the action</h3><p>Choose which match modes to clip and how much footage to save around each kill. Set a shortcut for manual replays.</p></article>
+      <article><h3>Find the right moment</h3><p>Review clips by match and round, jump to a kill marker, and save a trimmed copy.</p></article>
+      <article><h3>Export after the match</h3><p>Queue clips with a 10 MB or 25 MB limit per file. Connect a sharing destination if you want to upload from the app.</p></article>
+    </div>
+  </section>
+  <section id="install">
+    <h2>Record your first clip</h2>
+    <ol class="steps">
+      <li><h3>Install on Windows</h3><p>Download the setup file from the latest GitHub release and run it. For the portable build, extract the ZIP and run the app inside it. Releases are unsigned.</p></li>
+      <li><h3>Connect CS2</h3><p>In Settings, open <strong>CS2 connection</strong> and select <strong>Connect CS2</strong>. Finish setup, then restart CS2 if it was open.</p></li>
+      <li><h3>Check a replay</h3><p>Enter a practice match and wait for <strong>Replay buffer ready</strong>. Save a replay and play it back. In Windows 11, select <strong>CS2 only</strong> under Recording to isolate game audio.</p></li>
+    </ol>
+    <a href="https://github.com/thelifeofsuleyman/cs2-clipper/releases/latest">Release notes and download files</a>
+  </section>
+  <section id="performance">
+    <div class="performance-layout">
+      <div>
+        <h2>How much FPS headroom do you have?</h2>
+        <p>Enter your FPS with capture off and the FPS you want to maintain. Then explore what would happen if recording added time to each frame.</p>
+        <p id="fps-assumptions" class="muted">The inputs below are hypothetical examples. The calculator assumes a fixed amount of extra time per frame. Actual capture cost depends on your hardware, settings, and what’s happening in the game.</p>
+        <details>
+          <summary>How to measure your actual capture cost</summary>
+          <p>Replay the same part of a CS2 demo with capture off, then on. Keep the resolution and game settings fixed. Repeat both runs and compare average FPS and 1% lows. Also check that the replay plays with sound.</p>
+        </details>
+      </div>
+      <div class="calculator" aria-labelledby="fps-title" aria-describedby="fps-assumptions">
+        <h3 id="fps-title">FPS scenario calculator</h3>
+        <div class="fps-inputs">
+          <label for="baseline-fps">FPS with capture off
+            <input id="baseline-fps" type="number" inputmode="numeric" min="1" max="1000" step="1" value="144">
+          </label>
+          <label for="target-fps">Minimum FPS you want
+            <input id="target-fps" type="number" inputmode="numeric" min="1" max="1000" step="1" value="120">
+          </label>
+        </div>
+        <div class="slider-line">
+          <label for="added-time">Assumed extra time per frame</label>
+          <output id="added-time-label" for="added-time">1.5 ms</output>
+        </div>
+        <input id="added-time" type="range" min="0" max="8" step="0.1" value="1.5">
+        <div class="range-ends" aria-hidden="true"><span>0 ms</span><span>8 ms</span></div>
+        <div class="fps-results" role="status" aria-atomic="true">
+          <div><span>Estimated FPS in this scenario</span><output id="estimated-fps" for="baseline-fps added-time">118.4 FPS</output></div>
+          <div><span>Extra time budget at your target</span><output id="headroom" for="baseline-fps target-fps">1.39 ms</output></div>
+          <p id="fps-note">This scenario puts you below your 120 FPS target.</p>
+        </div>
+        <noscript><p>Enable JavaScript to calculate with your own inputs. Example: a baseline of 144 FPS and 1.5 ms of added frame time gives about 118 FPS.</p></noscript>
+      </div>
+    </div>
+  </section>
+  <section id="help">
+    <h2>Troubleshooting</h2>
+    <details><summary>CS2 connects but clips are missing</summary><p>Check the automatic highlight mode and minimum kills under Settings → Highlights. Deathmatch is excluded by default. Try a manual replay once the buffer is ready to check capture separately.</p></details>
+    <details><summary>My clip has no audio</summary><p>Choose an audio source under Settings → Recording and save a new replay. CS2-only capture requires Windows 11. If you use OBS, configure the audio sources in OBS.</p></details>
+    <details><summary>Where are my clips?</summary><p>Use <strong>Open clips folder</strong> in the tray menu. Settings → Storage lets you choose where future clips go.</p></details>
+    <p>For recording problems, open <strong>Activity → Copy recorder diagnostics</strong> and include the report with your recording issue.</p>
+    <a href="https://github.com/thelifeofsuleyman/cs2-clipper/issues/new?template=recording.yml">Report a recording problem</a>
+  </section>
+</main>
+<footer class="wrap foot"><span>RoundLatch</span><a href="https://github.com/thelifeofsuleyman/cs2-clipper">Source on GitHub</a></footer>
+</body>
+</html>
