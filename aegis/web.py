@@ -23,7 +23,7 @@ from flask import Flask, Response, abort, g, jsonify, redirect, request, send_fi
 from . import __version__, config, media, paths, update
 from .batch_exports import BatchExports, LIMITS_MB, MAX_CLIPS
 from .config import Config
-from .clips import Catalog
+from .clips import Catalog, ClipBudgetFull
 from .engine import Engine, format_caption
 from .log import log, recent
 from .pages import DASHBOARD_HTML, SETUP_HTML
@@ -77,6 +77,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
             return jsonify(ok=False, error="Another video operation is still running."), 409
         try:
             return run()
+        except ClipBudgetFull as exc:
+            return jsonify(ok=False, error=str(exc)), 409
         except Exception as e:
             log(f"Video operation failed: {e}")
             return jsonify(ok=False, error="Video operation failed. See Activity for details."), 500
@@ -133,13 +135,13 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         enabled = engine.health.enabled
         downloads = release_checker.cached_downloads()
         error = ""
-        if enabled and request.args.get("downloads") == "1":
+        if request.args.get("downloads") == "1":
             result = release_checker.check(manual=True)
             downloads, error = result.downloads, result.error
         counts = engine.health.snapshot()
         if enabled and downloads is not None:
             counts["latest_release_downloads"] = downloads
-        return jsonify(enabled=enabled, counts=counts, download_error=error)
+        return jsonify(enabled=enabled, counts=counts, latest_release_downloads=downloads, download_error=error)
 
     @app.post("/api/quit")
     def api_quit():
@@ -186,8 +188,57 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
     def api_delete_clip(clip_id: str):
         # Delete the actual video file too, by default (pass ?keep=1 to keep it).
         delete_file = request.args.get("keep") != "1"
-        ok = catalog.remove(clip_id, delete_file=delete_file)
+        try:
+            ok = catalog.remove(clip_id, delete_file=delete_file)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
+        except OSError:
+            return jsonify(error="Could not delete the clip. Check that its drive is available."), 503
         return (jsonify(ok=True) if ok else (jsonify(error="not found"), 404))
+
+    @app.get("/api/deleted-clips")
+    def api_deleted_clips():
+        return jsonify(clips=[_clip_json(c) for c in catalog.list(deleted=True)])
+
+    @app.post("/api/deleted-clips/<clip_id>")
+    def api_change_deleted_clip(clip_id: str):
+        body = request.get_json(silent=True)
+        action = body.get("action") if isinstance(body, dict) else None
+        if action not in ("trash", "restore", "delete"):
+            return jsonify(error="Choose a supported clip action."), 400
+        try:
+            ok = (catalog.remove(clip_id, delete_file=True, from_trash=True) if action == "delete"
+                  else catalog.set_deleted(clip_id, action == "trash"))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 409
+        except OSError:
+            return jsonify(error="Could not update the clip. Check that its drive is available."), 503
+        return jsonify(ok=True) if ok else (jsonify(error="Clip not found in this view."), 404)
+
+    @app.get("/api/clip-storage")
+    def api_clip_storage():
+        try:
+            return jsonify(used_bytes=catalog.used_bytes(), budget_bytes=cfg.clip_budget_bytes())
+        except OSError:
+            return jsonify(error="One of the clip locations is unavailable."), 503
+
+    @app.post("/api/clip-storage/relink")
+    def api_relink_clips():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify(error="Enter the original and moved clip folders."), 400
+        old, new = body.get("old"), body.get("new")
+        if any(not isinstance(folder, str) or not folder or folder.startswith(("\\\\?\\", "\\\\.\\"))
+               or not Path(folder).is_absolute() for folder in (old, new)):
+            return jsonify(error="Enter two absolute folder paths."), 400
+        try:
+            old_path, new_path = Path(old).resolve(), Path(new).resolve(strict=True)
+            if not new_path.is_dir() or old_path == new_path:
+                return jsonify(error="Choose a different, available folder for the moved clips."), 400
+            count = catalog.relink(old_path, new_path)
+        except (OSError, ValueError, RuntimeError):
+            return jsonify(error="Could not reconnect clips. Check the folder paths and try again."), 400
+        return jsonify(ok=True, count=count)
 
     @app.post("/api/clips/<clip_id>/share")
     def api_share_clip(clip_id: str):
@@ -207,10 +258,14 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         limit = body.get("max_mb") if isinstance(body, dict) else None
         if type(limit) is not int or limit not in LIMITS_MB:
             return jsonify(error="Choose a 10 MB or 25 MB size limit."), 400
+        try:
+            window = _export_window(body)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
         max_bytes = limit * 1_000_000
 
         def export():
-            if source.stat().st_size <= max_bytes:
+            if window is None and source.stat().st_size <= max_bytes:
                 with source.open("rb") as clip:
                     data = clip.read(max_bytes + 1)
                 if 0 < len(data) <= max_bytes:
@@ -218,12 +273,22 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
                                          as_attachment=True, mimetype=_VIDEO_MIME[source.suffix.lower()])
                     response.headers["X-Aegis-Original"] = "1"
                     return response
+            if not engine.can_batch_export():
+                return jsonify(error="This copy needs encoding. Queue it to protect gameplay.",
+                               queue_required=True), 409
             ffmpeg = media.resolve_ffmpeg(cfg.get("ffmpeg_path", ""))
             if not ffmpeg:
                 return jsonify(error="FFmpeg is unavailable. You can download the original instead."), 503
             with tempfile.TemporaryDirectory(prefix="aegis-share-") as scratch:
                 out = Path(scratch) / "share.mp4"
-                if not media.reencode_to_fit(ffmpeg, source, out, max_bytes):
+                options = {"window": window} if window is not None else {}
+                try:
+                    ready = media.reencode_to_fit(ffmpeg, source, out, max_bytes,
+                                                  pause=lambda: not engine.can_batch_export(), **options)
+                except media.ExportPaused:
+                    return jsonify(error="CS2 started while the copy was encoding. Queue it for later.",
+                                   queue_required=True), 409
+                if not ready:
                     return jsonify(error="Could not fit this clip under the selected limit. Try a larger limit."), 422
                 data = out.read_bytes()
             return send_file(BytesIO(data), download_name=f"{source.stem}-share.mp4",
@@ -246,7 +311,7 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         if type(limit) is not int or limit not in LIMITS_MB:
             return jsonify(error="Choose a 10 MB or 25 MB limit per clip."), 400
         try:
-            job = exports.add(list(dict.fromkeys(clip_ids)), limit)
+            job = exports.add(list(dict.fromkeys(clip_ids)), limit, window=_export_window(body))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         except OSError:
@@ -393,7 +458,11 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
                     with tempfile.TemporaryFile(dir=paths.clips_dir(folder)):
                         pass
                 except (OSError, ValueError):
-                    return jsonify(error="Choose an absolute folder path that Aegis can write to."), 400
+                    return jsonify(error="Choose an absolute folder path that RoundLatch can write to."), 400
+        if "budget_gib" in patch.get("storage", {}):
+            budget = patch["storage"]["budget_gib"]
+            if type(budget) is not int or not 0 <= budget <= 4096:
+                return jsonify(error="Choose a whole-number storage budget between 0 and 4096 GiB."), 400
         before = cfg.as_dict()
         cfg.update(patch)
         cfg.save()
@@ -403,6 +472,8 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         backend_changed = before["recording"] != recording
         if recording["backend"] == "obs":
             backend_changed = backend_changed or before["obs"] != cfg.get("obs")
+        if cfg.get("verify_first_replay") and (backend_changed or before["hotkeys"] != cfg.get("hotkeys")):
+            engine.replay_receipt = None
         # Editing sharing or highlight settings should not clear the replay buffer.
         if backend_changed and not cfg.get("first_run"):
             engine.restart_recording()
@@ -474,9 +545,28 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
                 warning = f"Could not connect CS2: {e}"
                 log(warning)
         cfg.set("first_run", False)
+        cfg.set("verify_first_replay", True)
         cfg.save()
         engine.restart_recording()  # begin capturing now that setup is done
         return jsonify(ok=True, restart_required=restart_required, warning=warning)
+
+    @app.post("/api/verify-replay")
+    def api_verify_replay():
+        body = request.get_json(silent=True)
+        action = body.get("action") if isinstance(body, dict) else None
+        if action not in ("start", "dismiss", "confirm"):
+            return jsonify(error="Choose how to continue the replay check."), 400
+        if action == "confirm":
+            receipt = engine.replay_receipt or {}
+            clip_id = receipt.get("clip_id")
+            clip = catalog.get(clip_id) if clip_id and clip_id == body.get("clip_id") else None
+            if not clip or not clip.exists():
+                return jsonify(error="Save another replay with your shortcut and play it back first."), 409
+        cfg.set("verify_first_replay", action == "start")
+        cfg.save()
+        if action == "start":
+            engine.replay_receipt = None
+        return jsonify(ok=True)
 
     # ───────── auto-update ─────────
     @app.get("/api/update/check")
@@ -503,8 +593,18 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
 
 
 # ───────── helpers ─────────
+def _export_window(body: dict) -> tuple[float, float] | None:
+    if "start" not in body and "end" not in body:
+        return None
+    start, end = body.get("start"), body.get("end")
+    if (type(start) not in (int, float) or type(end) not in (int, float)
+            or not 0 <= start < end < float("inf") or end - start < 0.249):
+        raise ValueError("Choose at least 0.25 seconds within the clip.")
+    return start, end
+
+
 _UI_SETTINGS = {
-    "storage": {"clips_dir"},
+    "storage": {"clips_dir", "budget_gib"},
     "metrics": {"enabled": bool},
     "hotkeys": {"replay"},
     "engine": {"debounce_sec", "min_kills", "highlight_modes", "cs2_cfg_dir",

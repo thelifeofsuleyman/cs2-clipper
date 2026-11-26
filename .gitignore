@@ -15,6 +15,7 @@ packaging/Output/
 packaging/vendor/
 packaging/_version_info.txt
 packaging/aegis.ico
+packaging/roundlatch.ico
 *.egg-info/
 
 # OS

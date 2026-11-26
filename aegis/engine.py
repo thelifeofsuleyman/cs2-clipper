@@ -27,7 +27,7 @@ import uuid
 from pathlib import Path
 
 from . import media, paths, polish, uploaders
-from .clips import Catalog, Clip
+from .clips import Catalog, Clip, ClipBudgetFull
 from .config import Config
 from .health import HealthMetrics
 from .log import log
@@ -77,6 +77,7 @@ class Engine:
         self.recorder = make_recorder(cfg, self.health)
         self.replay_hotkey_state = "off"
         self.replay_receipt = None
+        self._highlight_notice = None
         self.notify_replay = None
         self._storage_status = StorageStatus()
         self._lock = threading.Lock()
@@ -188,6 +189,7 @@ class Engine:
             elif self._match and mode:
                 self._match["match_mode"] = mode
             if reset:
+                self._highlight_notice = None
                 if prev != -1:
                     log(f"New match / reset (kills {prev} -> {current_kills})")
                 self._match_generation += 1
@@ -207,6 +209,9 @@ class Engine:
             self._recent_kills = [kill for kill in self._recent_kills if kill[0] >= history_start]
             self._recent_kills.append(event)
             if not self._mode_allows_highlights(self._last_mode):
+                disabled = self.cfg.get("engine.highlight_modes") == "off"
+                self._highlight_notice = {"state": "skipped", "message": "Kill detected. Automatic highlights are off." if disabled
+                                          else "Kill detected. This match mode is excluded by your highlight settings."}
                 return
             if self._last_kill_at is not None and now - self._last_kill_at >= self._replay_window():
                 if self._state["pending_kills"]:
@@ -217,6 +222,7 @@ class Engine:
             self._last_kill_at = now
             self._kill_events.append(event)
             self._state["pending_kills"] += diff
+            self._highlight_notice = {"state": "detected", "message": "Kill detected. Waiting for the streak to end."}
             log(f"Kill +{diff} (pending {self._state['pending_kills']}) "
                 f"on {map_name} round {round_n}")
             self._arm_timer()
@@ -268,6 +274,7 @@ class Engine:
             pending = self._state["pending_kills"]
             last_gsi = self._last_gsi
             mode = self._last_mode
+            highlight_notice = self._highlight_notice
         rec = self.recorder.status()
         return {
             "recorder": rec,
@@ -277,6 +284,9 @@ class Engine:
             "automatic_highlights": self._mode_allows_highlights(mode),
             "replay_hotkey": self.replay_hotkey_state,
             "replay_receipt": self.replay_receipt,
+            "highlight_notice": highlight_notice,
+            "verify_first_replay": bool(self.cfg.get("verify_first_replay")),
+            "replay_shortcut": self.cfg.get("hotkeys.replay", "") if self.cfg.get("verify_first_replay") else "",
             "storage": self.storage_status(),
             "gsi_connected": bool(last_gsi and time.monotonic() - last_gsi < 25),
             "enabled_targets": [
@@ -336,7 +346,24 @@ class Engine:
         with self._save_lock:
             saved = self._save_current_streak(token)
         if saved:
-            self._publish_clip(*saved)
+            notice, generated, clip = saved
+            try:
+                self._publish_clip(*clip, generated=generated)
+            except ClipBudgetFull as exc:
+                self._finish_highlight_notice(notice, "skipped", str(exc))
+            except Exception as exc:
+                self.health.add(save_errors=1)
+                log(f"Could not add the highlight to the library: {exc}")
+                self._finish_highlight_notice(notice, "failed",
+                                              "The highlight could not be added to the library. Check Activity.")
+            else:
+                self.health.add(clips_saved=1)
+                self._finish_highlight_notice(notice, "saved", "Highlight saved to your clip library.")
+
+    def _finish_highlight_notice(self, previous: dict | None, state: str, message: str) -> None:
+        with self._lock:
+            if self._highlight_notice is previous:
+                self._highlight_notice = {"state": state, "message": message}
 
     def _save_current_streak(self, token) -> tuple | None:
         # Snapshot the streak but DON'T zero it yet — only deduct once we know
@@ -356,8 +383,15 @@ class Engine:
             side = self._state["side"]
             steam_name = self._state["steam_name"]
             steam_id = self._state["steam_id"]
+            notice = self._highlight_notice
 
-        if not self._mode_allows_highlights(mode) or kills < int(self.cfg.get("engine.min_kills")):
+        minimum = int(self.cfg.get("engine.min_kills"))
+        allowed = self._mode_allows_highlights(mode)
+        if not allowed or kills < minimum:
+            if kills:
+                reason = (f"Skipped highlight. The streak was below your {minimum}-kill minimum."
+                          if allowed else "Skipped highlight. This match mode is excluded.")
+                self._finish_highlight_notice(notice, "skipped", reason)
             self._consume_pending(kills, generation, len(events))
             return
 
@@ -365,24 +399,37 @@ class Engine:
         expires_at = (last_kill if last_kill is not None else time.monotonic()) + clip_seconds
         if time.monotonic() >= expires_at:
             log("Streak aged out of the replay buffer before it could be saved")
+            self._finish_highlight_notice(notice, "failed", "The highlight expired before the recorder could save it.")
             self._consume_pending(kills, generation, len(events))
             return
 
         oldest = time.monotonic() - clip_seconds
         retained = [event for event in events if event[0] >= oldest]
         recent_kills = sum(count for _, count, _ in retained)
-        if recent_kills < int(self.cfg.get("engine.min_kills")):
+        if recent_kills < minimum:
+            self._finish_highlight_notice(notice, "skipped", "Too few kills were still in the replay buffer.")
             self._consume_pending(kills, generation, len(events))
             return
         log(f"Saving highlight for {recent_kills} kill(s)")
         try:
+            self._check_clip_budget()
             raw_tmp = self.clips_dir() / f".raw_{uuid.uuid4().hex[:8]}.mp4"
             ranges = highlight_ranges([stamp for stamp, _, _ in retained], *self.cfg.highlight_padding())
             clip_path, spans = self._record_replay(clip_seconds, raw_tmp, ranges)
+        except ClipBudgetFull as exc:
+            self._consume_pending(kills, generation, len(events))
+            self._finish_highlight_notice(notice, "skipped", str(exc))
+            return
         except Exception as e:
             log(f"Replay save failed: {e}")
             clip_path = None
         if clip_path is None:
+            self.health.add(save_errors=1)
+            status = self.recorder.status()
+            starting = status.get("state") == "starting"
+            self._finish_highlight_notice(notice, "warming_up" if starting else "failed",
+                                          "The replay buffer is warming up. RoundLatch will retry."
+                                          if starting else "The recorder could not save the highlight. RoundLatch will retry while it is in the buffer.")
             with self._lock:
                 if generation == self._match_generation and token is self._timer_token:
                     # A fresh kill supersedes this retry and starts a new debounce.
@@ -392,7 +439,7 @@ class Engine:
 
         self._consume_pending(kills, generation, len(events))
         match["kill_markers"] = playback_markers(retained, spans)
-        return clip_path, recent_kills, map_name, round_n, side, steam_name, steam_id, match
+        return notice, clip_path == raw_tmp, (clip_path, recent_kills, map_name, round_n, side, steam_name, steam_id, match)
 
     def _replay_window(self) -> float:
         requested = float(self.cfg.get("recording.clip_seconds", 30))
@@ -402,7 +449,7 @@ class Engine:
         return max(requested, history, max(debounce, self.cfg.highlight_padding()[1]) + 2 * segment)
 
     def _publish_clip(self, clip_path: Path, kills: int, map_name: str, round_n: int,
-                      side: str, steam_name: str, steam_id: str, metadata: dict) -> None:
+                      side: str, steam_name: str, steam_id: str, metadata: dict, *, generated=False) -> None:
         # Produce a share-ready version (intro card + fades); fall back to raw.
         produced = clip_path
         try:
@@ -423,9 +470,17 @@ class Engine:
         # Give it a human filename: <map>_<kills>  e.g. mirage_4K, inferno_ACE
         with self._file_lock:
             final = self._finalize_clip(produced, map_name, kills)
-        clip = self._catalog_clip(final, kills, map_name, round_n, side, metadata=metadata)
+        try:
+            clip = self._catalog_clip(final, kills, map_name, round_n, side, metadata=metadata)
+        except ClipBudgetFull:
+            if generated:
+                final.unlink(missing_ok=True)
+            raise
         caption = format_caption(kills, map_name, round_n, side)
-        self.fan_out(clip, caption, automatic=True)
+        try:
+            self.fan_out(clip, caption, automatic=True)
+        except Exception as exc:
+            log(f"Could not share the saved highlight: {exc}")
 
     def _finalize_clip(self, src: Path, map_name: str, kills: int) -> Path:
         """Move the clip to a unique name, preserving its container extension."""
@@ -450,6 +505,11 @@ class Engine:
                 del self._kill_events[:event_count]
                 self._state["pending_kills"] = max(0, self._state["pending_kills"] - kills)
 
+    def _check_clip_budget(self) -> None:
+        budget = self.cfg.clip_budget_bytes()
+        if budget and self.catalog.used_bytes() >= budget:
+            raise ClipBudgetFull()
+
     def _catalog_clip(self, path: Path, kills, map_name, round_n, side, *, title=None, tags=None,
                       metadata=None) -> Clip:
         cid = f"{int(path.stat().st_mtime)}_{uuid.uuid4().hex[:6]}"
@@ -471,7 +531,7 @@ class Engine:
             **(metadata or {}),
         )
         try:
-            self.catalog.add(clip)
+            self.catalog.add(clip, budget=self.cfg.clip_budget_bytes())
         except OSError:
             if thumb is not None:
                 thumb.unlink(missing_ok=True)
@@ -480,6 +540,7 @@ class Engine:
         return clip
 
     def trim_clip(self, original: Clip, start: float, end: float) -> Clip | None:
+        self._check_clip_budget()
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
             raise ValueError("FFmpeg is unavailable.")
@@ -534,6 +595,7 @@ class Engine:
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
             return {"ok": False, "detail": "ffmpeg not found — cannot make a test clip"}
+        self._check_clip_budget()
         out = self.clips_dir() / f"test_{uuid.uuid4().hex[:10]}.mp4"
         if media.make_test_clip(ffmpeg, out, seconds=6) is None:
             return {"ok": False, "detail": "test clip generation failed"}
@@ -551,9 +613,15 @@ class Engine:
         except Exception as e:
             log(f"Test clip polish errored: {e}")
 
-        clip = self._catalog_clip(out, 5, "de_dust2", 0, "?")
-        self.catalog.update(clip.id, title="Test clip (ACE preview)", tags=["test"])
+        clip = self._catalog_test_clip(out, "Test clip (ACE preview)", 5, "de_dust2")
         return {"ok": True, "clip_id": clip.id}
+
+    def _catalog_test_clip(self, path: Path, title: str, kills: int, map_name: str) -> Clip:
+        try:
+            return self._catalog_clip(path, kills, map_name, 0, "?", title=title, tags=["test"])
+        except ClipBudgetFull:
+            path.unlink(missing_ok=True)
+            raise
 
     def save_replay(self) -> dict:
         with self._lock:
@@ -565,15 +633,21 @@ class Engine:
             round_n = self._state["round_n"]
             side = self._state["side"]
         try:
+            self._check_clip_budget()
             out = self.clips_dir() / f"replay_{uuid.uuid4().hex[:10]}.mp4"
             captured, spans = self._record_replay(float(self.cfg.get("recording.clip_seconds", 30)), out)
+        except ClipBudgetFull as exc:
+            return {"ok": False, "detail": str(exc)}
         except OSError as exc:
+            self.health.add(save_errors=1)
             log(f"Replay could not be written: {exc}")
             detail = "The save drive is full." if paths.disk_full(exc) else "The clip folder is unavailable or unwritable."
             return {"ok": False, "detail": detail}
         except ValueError:
+            self.health.add(save_errors=1)
             return {"ok": False, "detail": "The clip folder path is invalid."}
         if not captured:
+            self.health.add(save_errors=1)
             status = self.recorder.status()
             detail = status.get("save_error") or {
                 "starting": "The replay buffer is still warming up.",
@@ -582,6 +656,7 @@ class Engine:
             }.get(status.get("state"), "The replay buffer is unavailable. Check capture status and Activity.")
             return {"ok": False, "detail": detail}
         warning = ""
+        generated = captured == out
         if self.cfg.get("storage.clips_dir") and captured.parent != out.parent:
             destination = out.with_suffix(captured.suffix)
             try:
@@ -603,20 +678,28 @@ class Engine:
             clip = self._catalog_clip(captured, sum(m["kills"] for m in markers), map_name,
                                       markers[-1]["round"] if markers else round_n, side,
                                       title="Manual replay", metadata=match)
+        except ClipBudgetFull as exc:
+            if generated:
+                captured.unlink(missing_ok=True)
+            return {"ok": False, "detail": str(exc)}
         except OSError as exc:
+            self.health.add(save_errors=1)
             log(f"Replay file saved, but could not write the library: {exc}")
             detail = "The replay file was saved, but the library could not be updated."
             return {"ok": False, "detail": detail}
+        self.health.add(clips_saved=1)
         return {"ok": True, "clip_id": clip.id, "warning": warning}
 
     def save_shortcut_replay(self) -> None:
         try:
             result = self.save_replay()
         except Exception as exc:
+            self.health.add(save_errors=1)
             log(f"Replay shortcut failed: {exc}")
             result = {"ok": False, "detail": "Could not save the replay. Check Activity."}
         text = (result.get("warning") or "Replay saved to your library.") if result["ok"] else result["detail"]
-        self.replay_receipt = {"id": uuid.uuid4().hex, "ok": result["ok"], "message": text}
+        self.replay_receipt = {"id": uuid.uuid4().hex, "ok": result["ok"], "message": text,
+                               "clip_id": result.get("clip_id")}
         log(f"Replay shortcut: {text}")
         notify = self.notify_replay
         if notify is not None:
@@ -631,6 +714,7 @@ class Engine:
         ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
         if not ffmpeg:
             return {"ok": False, "detail": "ffmpeg not found"}
+        self._check_clip_budget()
         out = self.clips_dir() / f"capture_test_{uuid.uuid4().hex[:10]}.mp4"
         method = media.capture_screen_test(ffmpeg, out, seconds, self.cfg)
         if not method:
@@ -643,8 +727,7 @@ class Engine:
             if not self.cfg.get("first_run"):
                 self.restart_recording()
             log(f"Capture method switched to {method} (it's what works on this PC)")
-        clip = self._catalog_clip(out, 0, "screen capture test", 0, "?")
-        self.catalog.update(clip.id, title=f"Screen capture test ({method})", tags=["test"])
+        clip = self._catalog_test_clip(out, f"Screen capture test ({method})", 0, "screen capture test")
         return {"ok": True, "clip_id": clip.id, "method": method}
 
     def build_montage(self, clip_ids: list[str]) -> Path | None:

@@ -1,4 +1,4 @@
-"""Aegis Clipper — local-first automatic CS2 highlight clipper.
+"""RoundLatch — local-first automatic CS2 highlight clipper.
 
 A polished evolution of the original single-file clipper. Detects kill
 streaks via CS2 Game State Integration, tells OBS to save its replay buffer,
@@ -19,5 +19,5 @@ Package layout:
   app         - process entry: engine + dashboard + system tray
 """
 
-__version__ = "2.1.26"
-APP_NAME = "Aegis Clipper"
+__version__ = "2.1.27"
+APP_NAME = "RoundLatch"

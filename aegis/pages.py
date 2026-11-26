@@ -4,11 +4,14 @@ Kept as Python strings so PyInstaller has no template/static files to locate.
 The pages are static shells; all data flows through the JSON API in web.py.
 """
 
+from .brand import logo_svg
+
 _BASE_CSS = """
 :root{
   --bg:#101216; --panel:#171a20; --panel2:#20242c; --line:#2b303a; --line2:#3b424f;
   --txt:#eff1f5; --muted:#a6afbd; --faint:#858e9e;
-  --accent:#ff8b6d; --accent2:#94bcff; --ok:#75dcb5; --warn:#f5bd65; --err:#ff818e;
+  --accent:#d6f582; --accent-bg:#252d20; --accent-line:#3e4b2b;
+  --accent2:#94bcff; --ok:#75dcb5; --warn:#f5bd65; --err:#ff818e;
   --r:10px; --r2:14px; --shadow:0 10px 30px rgba(0,0,0,.45);
 }
 *{box-sizing:border-box}
@@ -26,8 +29,8 @@ button{font:inherit;cursor:pointer;border:1px solid var(--line);border-radius:va
 button:hover{background:#20252e;border-color:var(--line2)}
 button:active{transform:translateY(1px)}
 button:disabled{opacity:.5;cursor:default}
-button.primary{background:var(--accent);border-color:transparent;color:#21130f;font-weight:700}
-button.primary:hover:not(:disabled){background:#ffa389}
+button.primary{background:var(--accent);border-color:transparent;color:#18201a;font-weight:700}
+button.primary:hover:not(:disabled){background:#e6ffac}
 button.ghost{background:transparent}
 .btn-icon{width:34px;height:34px;padding:0;justify-content:center;color:var(--muted)}
 .btn-icon:hover{color:var(--txt)}
@@ -39,7 +42,7 @@ header.topbar{display:flex;align-items:center;gap:16px;padding:13px 24px;
   background:#14171c;
   border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
 .brand{display:flex;align-items:center;gap:11px;font-weight:650;font-size:15px;letter-spacing:.2px}
-.brand .logo{filter:drop-shadow(0 1px 5px rgba(255,90,57,.35))}
+.brand svg{filter:drop-shadow(0 1px 5px rgba(214,245,130,.16))}
 main{width:100%;max-width:min(1560px,96vw);margin:0 auto;padding:clamp(16px,2.2vw,30px) clamp(14px,1.8vw,28px)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:16px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r2);overflow:hidden;
@@ -53,7 +56,7 @@ main{width:100%;max-width:min(1560px,96vw);margin:0 auto;padding:clamp(16px,2.2v
 .play .pbtn{width:46px;height:46px;border-radius:50%;background:rgba(10,12,16,.6);
   backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.25);display:grid;place-items:center}
 .play .ico{width:20px;height:20px;fill:#fff;stroke:none;margin-left:2px}
-.badge{position:absolute;top:9px;left:9px;background:var(--accent);color:#21130f;font-weight:700;
+.badge{position:absolute;top:9px;left:9px;background:var(--accent);color:#18201a;font-weight:700;
   font-size:11px;letter-spacing:.3px;padding:3px 8px;border-radius:7px}
 .badge.dur{left:auto;right:9px;background:rgba(5,7,10,.78);font-weight:600;color:#d7dce4}
 .card .body{padding:13px 14px;display:flex;flex-direction:column;gap:9px}
@@ -131,7 +134,7 @@ dialog::backdrop{background:#000a}
 .rail-item{display:flex;align-items:center;gap:11px;padding:9px 11px;border:1px solid transparent;
   border-radius:8px;background:transparent;color:var(--muted);font-weight:600;text-align:left}
 .rail-item:hover{background:var(--panel2);color:var(--txt)}
-.rail-item[aria-current],.rail-item[aria-pressed=true]{background:#30231f;border-color:#523329;color:var(--accent)}
+.rail-item[aria-current],.rail-item[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent-line);color:var(--accent)}
 .rail-foot{margin-top:auto;padding:0 7px;display:grid;gap:9px;color:var(--faint);font-size:12px}
 .rail-foot button{justify-self:start;padding:6px 9px;font-size:12px;color:var(--muted)}
 .workspace{max-width:1440px;padding:clamp(24px,3vw,48px);min-width:0}
@@ -141,7 +144,7 @@ dialog::backdrop{background:#000a}
   padding:18px 20px;margin:0 0 28px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r2)}
 .capture-info{display:flex;gap:14px;align-items:center;min-width:0}
 .capture-symbol,.empty-symbol{display:grid;place-items:center;flex:none;width:42px;height:42px;
-  border-radius:11px;background:#30241f;color:var(--accent)}
+  border-radius:11px;background:var(--accent-bg);color:var(--accent)}
 .capture-panel[data-ready=true] .capture-symbol{background:#1b352e;color:var(--ok)}
 .capture-panel h2{font-size:16px;line-height:1.25;margin:0 0 3px}
 .capture-panel p{margin:0;color:var(--muted);max-width:62ch;overflow-wrap:anywhere}
@@ -219,10 +222,10 @@ button[aria-busy=true]{cursor:progress}
 
 DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>Aegis Clipper</title><style>%CSS%</style></head><body>
+<title>RoundLatch</title><style>%CSS%</style></head><body>
 <div class=desktop>
 <aside class=rail>
-  <div class=brand><svg class=logo width=28 height=28 viewBox="0 0 48 48" fill=none><path d="M24 3 41 9 41 24 C41 35 33 42 24 45 C15 42 7 35 7 24 L7 9 Z" fill="#161b24" stroke="#ff5a3c" stroke-width="2.6"/><path d="M20 16 33 24 20 32 Z" fill="#ff5a3c"/></svg> Aegis Clipper</div>
+  <div class=brand>%BRAND_LOGO% RoundLatch</div>
   <nav aria-label="Main navigation">
     <button class=rail-item data-tab=clips aria-pressed=true>%FILM_ICON% Clip library</button>
     <button class=rail-item data-tab=matches aria-pressed=false><svg class=ico viewBox="0 0 24 24" aria-hidden=true><path d="M4 6h16M4 12h16M4 18h10"/></svg> Matches</button>
@@ -251,8 +254,9 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   <section class=capture-panel id=capturePanel aria-label="Capture status">
     <div class=capture-info>
       <span class=capture-symbol>%ACTIVITY_ICON%</span>
-      <div><h2 id=captureTitle>Connecting to Aegis</h2><p id=captureDetail aria-live=polite>Checking the replay buffer.</p>
-        <p class=receipt id=replayReceipt role=status></p></div>
+      <div><h2 id=captureTitle>Connecting to RoundLatch</h2><p id=captureDetail aria-live=polite>Checking the replay buffer.</p>
+        <p class=receipt id=replayReceipt role=status></p>
+        <p class=receipt id=highlightNotice role=status></p></div>
     </div>
     <div class=capture-actions>
       <a class=settings-link href="/setup#connection" id=connectionLink>CS2 setup</a>
@@ -260,8 +264,31 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
     </div>
   </section>
 
+  <div class=storage-warning id=cpuCaptureWarning hidden>
+    <span>Recording is using the CPU. If CS2 slows down, try Low impact capture.</span>
+    <a class=settings-link href="/setup#recording">Recording settings</a>
+  </div>
+  <section class=app-health id=verifyReplay hidden aria-labelledby=verifyHeading>
+    <h2 id=verifyHeading>Check your first replay</h2>
+    <ol>
+      <li id=verifyCS2></li>
+      <li id=verifyHotkey></li>
+      <li>Play the replay and check that the picture moves and you can hear the game.</li>
+    </ol>
+    <p id=verifyAudio hidden>Enable CS2-only or desktop audio in Recording before saving your test replay.</p>
+    <div class=dialog-actions>
+      <a class=settings-link href="/setup#connection" id=verifyConnect>Connect CS2</a>
+      <a class=settings-link href="/setup#recording">Shortcut and audio settings</a>
+      <button id=verifyPlay hidden>Play shortcut replay</button>
+      <button class=primary id=verifyConfirm hidden>Picture and game audio work</button>
+      <button class=ghost id=verifyLater>Do this later</button>
+    </div>
+    <p id=verifyStatus role=status></p>
+  </section>
   <div class=storage-warning id=storageWarning hidden><span id=storageMessage role=status></span>
     <button id=reviewStorage>Review largest clips</button></div>
+  <div class=storage-warning id=undoDeleteBar hidden><span role=status>Clip moved to Recently deleted.</span>
+    <button id=undoDelete>Undo</button></div>
 
   <section data-panel=clips>
     <div class="bar library-bar">
@@ -270,6 +297,7 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
         <label class=search>%SEARCH_ICON%<input type=search id=clipSearch aria-label="Search clips" placeholder="Search clips"></label>
         <select id=clipFilter aria-label="Filter clips"><option value=all>All clips</option><option value=test>Test clips</option></select>
         <select id=clipSort aria-label="Sort clips"><option value=newest>Newest first</option><option value=largest>Largest first</option></select>
+        <button id=openDeleted>Recently deleted</button>
       </div>
     </div>
     <div class=batch-actions id=batchSelection hidden>
@@ -285,13 +313,16 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   <section data-panel=logs hidden>
     <details class=app-health id=appHealth>
       <summary>App health counts</summary>
+      <div class=library-tools>
+        <p>Latest release downloads <strong id=downloadCount>—</strong></p>
+        <button id=refreshDownloads>Refresh GitHub downloads</button>
+      </div>
+      <p id=healthMessage role=status></p>
       <label><input type=checkbox id=healthEnabled>Collect app health counts on this PC</label>
-      <p>Share a report by copying it. Reports contain only counts and timings.</p>
+      <p>Reports contain only counts and timings and stay local until you copy and share them.</p>
       <div id=healthReport hidden>
         <dl id=healthCounts></dl>
-        <div class=library-tools><button id=refreshDownloads>Refresh GitHub downloads</button>
-          <button id=copyHealth>Copy app health report</button></div>
-        <p id=healthMessage role=status></p>
+        <button id=copyHealth>Copy app health report</button>
       </div>
     </details>
     <div class=bar>
@@ -331,10 +362,19 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
     </div>
     <div class=dialog-actions>
       <button id=previewTrim>Preview selection</button>
+      <button id=shareTrim disabled>Share selection</button>
       <button class=primary id=saveTrim disabled>Save trimmed copy</button>
     </div>
+    <p id=trimEstimate></p>
     <p class=trim-status id=trimStatus role=status></p>
   </details>
+</dialog>
+<dialog class=dialog id=deletedDialog aria-labelledby=deletedTitle>
+  <h3 id=deletedTitle>Recently deleted</h3>
+  <p>Restore a clip or permanently delete its video to free space.</p>
+  <ul id=deletedList></ul>
+  <p id=deletedStatus role=status></p>
+  <button id=closeDeleted>Close</button>
 </dialog>
 <dialog class=dialog id=shareDialog aria-labelledby=shareTitle>
   <h3 id=shareTitle>Share clip</h3>
@@ -349,9 +389,11 @@ DASHBOARD_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
     <div class=dialog-actions>
       <select id=shareLimit><option value=10>10 MB limit</option><option value=25>25 MB limit</option></select>
       <button id=prepareCopy>Prepare copy</button>
+      <button id=queueCopy>Queue after match</button>
       <a class=settings-link id=downloadCopy download hidden>Download smaller copy</a>
+      <button id=viewQueuedExports hidden>View queued exports</button>
     </div>
-    <p>Smaller copies can reduce detail or resolution. Your original stays in the library.</p>
+    <p>Copies that need encoding wait for a break in CS2. Your original stays in the library.</p>
     <p id=shareStatus role=status></p>
   </div>
 </dialog>
@@ -376,7 +418,7 @@ const selectedForExport = new Set();
 let batchFingerprint = '';
 let batchRequest = 0;
 let playerTrigger, playerClipId, playerGeneration = 0, previewEnd;
-let shareId, shareGeneration = 0, shareUrl;
+let shareId, shareGeneration = 0, shareUrl, shareWindow, shareTargets = false;
 const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
   '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
 }[ch]));
@@ -412,17 +454,20 @@ for (const b of $$('.rail button[data-tab]')) b.onclick = () => openTab(b.datase
 
 async function loadStatus() {
   const s = await api('/api/status');
-  $('#sendClip').hidden = !(s.enabled_targets || []).some(name => name !== 'gallery');
+  shareTargets = (s.enabled_targets || []).some(name => name !== 'gallery');
+  $('#sendClip').hidden = Boolean(shareWindow) || !shareTargets;
   const rec = s.recorder || {};
+  $('#cpuCaptureWarning').hidden = !rec.cpu_encoding;
+  renderReplayCheck(s);
   const replay = $('#saveReplay');
   const states = {
     waiting_game: ['Waiting for CS2', 'Open Counter-Strike 2 to start the rolling replay buffer.'],
-    starting: ['Starting capture', 'Aegis is preparing the replay buffer.'],
+    starting: ['Starting capture', 'RoundLatch is preparing the replay buffer.'],
     error: ['Capture unavailable', rec.detail || 'Open Activity to see recording errors.'],
     idle: ['Capture idle', rec.backend === 'obs' ? 'Start the Replay Buffer in OBS.' : 'Open CS2 or check capture settings.']
   };
   const retained = s.replay_available && !s.capturing;
-  const status = s.error ? ['Aegis disconnected', s.error] : retained
+  const status = s.error ? ['RoundLatch disconnected', s.error] : retained
     ? ['Last replay available', 'Save your last replay before the buffer expires in ' + rec.replay_expires_in + 's.']
     : s.capturing
     ? ['Replay buffer ready', s.gsi_connected
@@ -438,6 +483,8 @@ async function loadStatus() {
   const audio = rec.audio === 'unavailable' ? ' ' + (rec.audio_detail ||
     (rec.audio_source === 'cs2' ? 'CS2-only audio is unavailable.' : 'Desktop audio is unavailable.')) : '';
   if ($('#captureDetail').textContent !== detail + audio) $('#captureDetail').textContent = detail + audio;
+  const highlight = s.highlight_notice?.message || '';
+  if ($('#highlightNotice').textContent !== highlight) $('#highlightNotice').textContent = highlight;
   const receipt = $('#replayReceipt');
   if (s.replay_receipt && receipt.dataset.id !== s.replay_receipt.id) {
     const {id, ok, message} = s.replay_receipt;
@@ -467,6 +514,34 @@ async function loadStatus() {
     (rec.audio && rec.audio !== 'off' ? ' · ' + audioName + ' ' + rec.audio : '') : '';
 }
 
+let shortcutClip, playedShortcut;
+function renderReplayCheck(state) {
+  $('#verifyReplay').hidden = !state.verify_first_replay;
+  if (!state.verify_first_replay) return;
+  const connection = state.gsi_connected ? 'CS2 connected.' :
+    'Connect CS2 in Settings, then restart the game and enter a practice match.';
+  $('#verifyConnect').hidden = Boolean(state.gsi_connected);
+  $('#verifyAudio').hidden = state.recorder?.audio_source !== 'off';
+  const shortcut = state.replay_shortcut;
+  const hotkey = !shortcut ? 'Set a Save replay shortcut under Recording and save your settings.' :
+    state.replay_hotkey === 'unavailable' ? 'Choose another shortcut. Windows could not register ' + shortcut + '.' :
+    !state.replay_available ? 'Wait for the replay buffer to finish starting.' :
+    'With game audio playing, press ' + shortcut + ' to save a replay.';
+  if ($('#verifyCS2').textContent !== connection) $('#verifyCS2').textContent = connection;
+  if ($('#verifyHotkey').textContent !== hotkey) $('#verifyHotkey').textContent = hotkey;
+  shortcutClip = state.replay_receipt?.ok ? state.replay_receipt.clip_id : undefined;
+  $('#verifyPlay').hidden = !shortcutClip;
+  $('#verifyConfirm').hidden = !shortcutClip || playedShortcut !== shortcutClip;
+}
+$('#verifyPlay').onclick = () => playVideo(shortcutClip);
+async function finishReplayCheck(action) {
+  const result = await api('/api/verify-replay', jsonPost({action, clip_id:shortcutClip}));
+  if (result.ok) $('#verifyReplay').hidden = true;
+  else $('#verifyStatus').textContent = result.error || 'Could not save your replay check.';
+}
+$('#verifyConfirm').onclick = () => busy($('#verifyConfirm'), '', () => finishReplayCheck('confirm'));
+$('#verifyLater').onclick = () => busy($('#verifyLater'), '', () => finishReplayCheck('dismiss'));
+
 $('#saveReplay').onclick = () => busy($('#saveReplay'), 'Saving replay…', async () => {
   const r = await api('/api/replay', {method:'POST'});
   if (!r.ok) toast(r.error || r.detail || 'Could not save the replay.');
@@ -488,6 +563,7 @@ $('#reviewStorage').onclick = () => {
 };
 
 async function loadClips(force = false) {
+  if (document.hidden || backgrounded) return;
   const seq = ++clipRequest;
   const r = await api('/api/clips');
   if (seq !== clipRequest) return;
@@ -634,23 +710,66 @@ function bindCard(card) {
     if (activePage === 'favorites') renderClips();
   });
   const share = card.querySelector('[data-share]');
-  share.onclick = () => {
-    shareId = id;
-    shareGeneration++;
-    const clip = library.find(c => c.id === id);
-    $('#shareName').textContent = (clip.title || 'Untitled') + ' · ' + fileSize(clip.size_bytes || 0);
-    $('#downloadClip').href = clipMedia(id, 'download');
-    $('#shareDialog').showModal();
-  };
+  share.onclick = () => openShare(id);
   const remove = card.querySelector('[data-delete]');
   remove.onclick = () => {
-    if (!confirm('Delete this clip and its video file?')) return;
     busy(remove, '', async () => {
-      const r = await api(clipApi(id), {method:'DELETE'});
-      if (r.error) toast(r.error); else { toast('Clip deleted.'); await loadClips(true); }
+      const r = await changeDeletedClip(id, 'trash');
+      if (r.error) { toast(r.error); return; }
+      lastDeleted = id;
+      $('#undoDeleteBar').hidden = false;
+      await loadClips(true);
     });
   };
 }
+
+let lastDeleted;
+function changeDeletedClip(id, action) {
+  return api('/api/deleted-clips/' + encodeURIComponent(id), jsonPost({action}));
+}
+async function loadDeletedClips() {
+  const result = await api('/api/deleted-clips');
+  const list = $('#deletedList');
+  list.replaceChildren();
+  $('#deletedStatus').textContent = result.error || (result.clips.length ? '' : 'No deleted clips.');
+  if (result.error) return;
+  for (const clip of result.clips) {
+    const item = document.createElement('li');
+    const title = document.createElement('p');
+    title.textContent = (clip.title || 'Clip') + (clip.missing ? ' · File missing' : ' · ' + fileSize(clip.size_bytes));
+    item.append(title);
+    const actions = document.createElement('div');
+    actions.className = 'dialog-actions';
+    for (const [action, label] of [['restore','Restore'], ['delete','Delete permanently']]) {
+      const button = document.createElement('button');
+      button.textContent = label;
+      button.onclick = () => {
+        if (action === 'delete' && !confirm('Permanently delete this clip and its video?')) return;
+        busy(button, '', async () => {
+          const response = await changeDeletedClip(clip.id, action);
+          if (response.error) { $('#deletedStatus').textContent = response.error; return; }
+          if (clip.id === lastDeleted) $('#undoDeleteBar').hidden = true;
+          await Promise.all([loadDeletedClips(), loadClips(true)]);
+        });
+      };
+      actions.append(button);
+    }
+    item.append(actions);
+    list.append(item);
+  }
+}
+$('#openDeleted').onclick = () => {
+  $('#deletedDialog').showModal();
+  loadDeletedClips();
+};
+$('#closeDeleted').onclick = () => $('#deletedDialog').close();
+$('#undoDelete').onclick = () => busy($('#undoDelete'), '', async () => {
+  const response = await changeDeletedClip(lastDeleted, 'restore');
+  if (response.error) { toast(response.error); return; }
+  $('#undoDeleteBar').hidden = true;
+  await loadClips(true);
+  toast('Clip restored.');
+});
 
 function renderBatchSelection() {
   const count = selectedForExport.size;
@@ -709,32 +828,83 @@ $('#clipFilter').onchange = renderClips;
 $('#clipSort').onchange = renderClips;
 $('#closeShare').onclick = () => $('#shareDialog').close();
 $('#downloadClip').onclick = () => $('#shareDialog').close();
+function openShare(id, selection) {
+  const clip = library.find(c => c.id === id);
+  if (!clip) return;
+  shareId = id;
+  shareWindow = selection;
+  shareGeneration++;
+  clearShareCopy();
+  const size = selection && clip.size_bytes ?
+    'about ' + fileSize(estimatedSelectionBytes(clip, selection, selection.duration)) + ' before compression' :
+    fileSize(clip.size_bytes || 0);
+  $('#shareName').textContent = (clip.title || 'Untitled') + ' · ' + size;
+  $('#shareTitle').textContent = selection ? 'Share selection' : 'Share clip';
+  $('#downloadClip').hidden = Boolean(selection);
+  $('#downloadClip').href = clipMedia(id, 'download');
+  $('#sendClip').hidden = Boolean(selection) || !shareTargets;
+  $('#shareDialog').showModal();
+}
+function estimatedSelectionBytes(clip, selection, duration) {
+  return Math.round(clip.size_bytes * (selection.end - selection.start) / duration);
+}
 function clearShareCopy() {
   if (shareUrl) URL.revokeObjectURL(shareUrl);
   shareUrl = undefined;
   $('#downloadCopy').hidden = true;
   $('#downloadCopy').removeAttribute('href');
   $('#shareStatus').textContent = '';
+  $('#viewQueuedExports').hidden = true;
 }
 $('#shareDialog').onclose = clearShareCopy;
 $('#shareLimit').onchange = clearShareCopy;
+function shareRequest(limit) {
+  return shareWindow ? {max_mb:limit, start:shareWindow.start, end:shareWindow.end} : {max_mb:limit};
+}
+async function queueShare(clipId, payload, generation) {
+  const result = await api('/api/batch-exports', jsonPost({clip_ids:[clipId], ...payload}));
+  if (generation !== shareGeneration || !$('#shareDialog').open) return;
+  $('#shareStatus').textContent = result.error || 'Export queued. It will run when CS2 is between matches or closed.';
+  $('#viewQueuedExports').hidden = !result.job;
+}
+$('#queueCopy').onclick = () => busy($('#queueCopy'), 'Queuing…', async () => {
+  $('#prepareCopy').disabled = true;
+  $('#shareLimit').disabled = true;
+  try {
+    await queueShare(shareId, shareRequest(Number($('#shareLimit').value)), shareGeneration);
+  } finally {
+    $('#prepareCopy').disabled = false;
+    $('#shareLimit').disabled = false;
+  }
+});
+$('#viewQueuedExports').onclick = () => {
+  $('#shareDialog').close();
+  openTab('matches');
+  loadBatchJobs();
+};
 $('#prepareCopy').onclick = () => busy($('#prepareCopy'), 'Preparing…', async () => {
   clearShareCopy();
   const clip = library.find(c => c.id === shareId);
   const generation = shareGeneration;
   const limit = Number($('#shareLimit').value);
+  const payload = shareRequest(limit);
   $('#shareLimit').disabled = true;
+  $('#queueCopy').disabled = true;
   $('#shareStatus').textContent = 'Preparing the copy locally…';
   try {
-    const response = await apiFetch(clipApi(clip.id) + '/export', jsonPost({max_mb:limit}), 240000);
+    const response = await apiFetch(clipApi(clip.id) + '/export', jsonPost(payload), 240000);
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
+      if (result.queue_required && generation === shareGeneration && $('#shareDialog').open) {
+        await queueShare(clip.id, payload, generation);
+        return;
+      }
       throw new Error(result.error || 'Could not prepare the copy.');
     }
     const video = await response.blob();
     if (!$('#shareDialog').open || generation !== shareGeneration) return;
     const original = response.headers.get('X-Aegis-Original') === '1';
-    const name = (clip.title || 'Aegis clip').replace(/[<>:"/\\\\|?*]/g, '_').slice(0, 100);
+    const name = (clip.title || 'RoundLatch clip').replace(/[<>:"/\\\\|?*]/g, '_').slice(0, 100);
     const extension = {'video/quicktime':'.mov', 'video/x-matroska':'.mkv'}[video.type] || '.mp4';
     shareUrl = URL.createObjectURL(video);
     const link = $('#downloadCopy');
@@ -751,6 +921,7 @@ $('#prepareCopy').onclick = () => busy($('#prepareCopy'), 'Preparing…', async 
     }
   } finally {
     $('#shareLimit').disabled = false;
+    $('#queueCopy').disabled = false;
   }
 });
 $('#sendClip').onclick = () => busy($('#sendClip'), 'Sending…', async () => {
@@ -775,19 +946,23 @@ async function loadAppHealth(downloads = false) {
   if (seq !== healthRequest || data.error) return;
   $('#healthEnabled').checked = data.enabled;
   $('#healthReport').hidden = !data.enabled;
+  const total = data.latest_release_downloads;
+  $('#downloadCount').textContent = total == null ? '—' : total.toLocaleString();
+  if (downloads) $('#healthMessage').textContent = data.download_error ||
+    (total == null ? 'GitHub did not report a download count.' : 'Download count refreshed.');
   healthCounts = data.counts || {};
   if (!data.enabled) return;
   const n = healthCounts;
   const stats = [
-    ['Latest release downloads', n.latest_release_downloads ?? '—'],
+    ['Built-in capture starts', n.capture_ready],
     ['Average capture start', n.capture_ready ? Math.round(n.capture_start_ms / n.capture_ready) + ' ms' : '—'],
-    ['Replay save success', n.save_attempts ? Math.round(n.saves / n.save_attempts * 100) + '% (' + n.saves + '/' + n.save_attempts + ')' : '—'],
+    ['Capture errors', n.capture_errors],
+    ['Clips saved to library', n.clips_saved],
+    ['Replay save errors', n.save_errors],
     ['Dropped capture frames', n.frames_output ? n.frames_dropped.toLocaleString() : '—'],
   ];
   $('#healthCounts').innerHTML = stats.map(([label, value]) =>
     '<div><dt>' + label + '</dt><dd>' + escape(value) + '</dd></div>').join('');
-  if (downloads) $('#healthMessage').textContent = data.download_error ||
-    (n.latest_release_downloads == null ? 'GitHub did not report a download count.' : 'Download count refreshed.');
 }
 $('#appHealth').ontoggle = () => {
   if ($('#appHealth').open) loadAppHealth();
@@ -877,7 +1052,12 @@ function updateTrimWindow() {
   startSlider.setAttribute('aria-valuetext', trimTime(start));
   endSlider.setAttribute('aria-valuetext', trimTime(end));
   const save = $('#saveTrim');
-  save.disabled = (start === 0 && end === Number(endSlider.max)) || save.getAttribute('aria-busy') === 'true';
+  const trimmed = start !== 0 || end !== Number(endSlider.max);
+  save.disabled = !trimmed || save.getAttribute('aria-busy') === 'true';
+  $('#shareTrim').disabled = !trimmed;
+  const clip = library.find(clip => clip.id === playerClipId);
+  $('#trimEstimate').textContent = trimmed && clip?.size_bytes ?
+    'Estimated at original bitrate · ' + fileSize(estimatedSelectionBytes(clip, {start, end}, player.duration)) : '';
   $('#trimWindow').style.left = (start / player.duration * 100) + '%';
   $('#trimWindow').style.width = ((end - start) / player.duration * 100) + '%';
 }
@@ -934,12 +1114,22 @@ $('#previewTrim').onclick = () => {
   player.play().catch(() => {});
 };
 player.ontimeupdate = () => {
+  if (playerDialog.open && !player.paused && playerClipId === shortcutClip && player.currentTime >= 0.5) {
+    playedShortcut = shortcutClip;
+    $('#verifyConfirm').hidden = false;
+  }
   if (previewEnd !== undefined && player.currentTime >= previewEnd) {
     const stop = previewEnd;
     previewEnd = undefined;
     player.pause();
     player.currentTime = stop;
   }
+};
+$('#shareTrim').onclick = () => {
+  const selection = {start:startSlider.valueAsNumber, end:endSlider.valueAsNumber, duration:player.duration};
+  const id = playerClipId;
+  playerDialog.close();
+  openShare(id, selection);
 };
 $('#saveTrim').onclick = () => busy($('#saveTrim'), 'Saving copy…', async () => {
   const generation = playerGeneration;
@@ -1013,11 +1203,26 @@ $('#upBtn').onclick = async () => {
 $('#checkUpd').onclick = () => busy($('#checkUpd'), 'Checking…', () => checkUpdate(true));
 const setupMessage = sessionStorage.getItem('aegisSetupMessage');
 if (setupMessage) { toast(setupMessage); sessionStorage.removeItem('aegisSetupMessage'); }
-loadStatus();
-loadClips();
+let backgrounded = false;
+function refreshVisibleDashboard() {
+  if (document.hidden || backgrounded) return;
+  loadStatus();
+  if (activePage === 'logs') loadLogs();
+  else {
+    loadClips();
+    if (activePage === 'matches') loadBatchJobs();
+  }
+}
+window.__roundLatchVisible = visible => {
+  backgrounded = !visible;
+  if (visible) refreshVisibleDashboard();
+};
+document.addEventListener('visibilitychange', refreshVisibleDashboard);
+refreshVisibleDashboard();
 if (%AUTO_UPDATE%) checkUpdate();
-setInterval(loadStatus, 3000);
+setInterval(() => { if (!document.hidden && !backgrounded) loadStatus(); }, 3000);
 setInterval(() => {
+  if (document.hidden || backgrounded) return;
   if (activePage === 'logs') loadLogs();
   else {
     if (!$('#clipGrid').contains(document.activeElement)) loadClips();
@@ -1028,7 +1233,7 @@ setInterval(() => {
 
 SETUP_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>Aegis Clipper · Settings</title><style>%CSS%
+<title>RoundLatch · Settings</title><style>%CSS%
 .wizard{max-width:1010px;padding:clamp(22px,4vw,48px);padding-bottom:22px}
 .settings-layout{display:grid;grid-template-columns:170px minmax(0,1fr);gap:24px;align-items:start}
 .settings-nav{position:sticky;top:83px;display:grid;gap:5px}
@@ -1043,7 +1248,7 @@ SETUP_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
   border-radius:99px;background:#333944;position:relative;cursor:pointer}
 .row input[type=checkbox]::before{content:'';position:absolute;left:3px;top:3px;width:14px;height:14px;border-radius:50%;background:#c4cbd5}
 .row input[type=checkbox]:checked{background:var(--accent);border-color:var(--accent)}
-.row input[type=checkbox]:checked::before{left:19px;background:#281611}
+.row input[type=checkbox]:checked::before{left:19px;background:#18201a}
 .row input:disabled,.row select:disabled{opacity:.55}
 .statusline{font-size:13px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}
 .statusline:empty{display:none}
@@ -1058,7 +1263,7 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
 @media(max-width:420px){.row{grid-template-columns:minmax(0,1fr);gap:6px}.row input[type=checkbox]{justify-self:start}}
 </style></head><body>
 <header class=topbar>
-  <div class=brand><svg class=logo width=28 height=28 viewBox="0 0 48 48" fill=none><path d="M24 3 41 9 41 24 C41 35 33 42 24 45 C15 42 7 35 7 24 L7 9 Z" fill="#161b24" stroke="#ff5a3c" stroke-width="2.6"/><path d="M20 16 33 24 20 32 Z" fill="#ff5a3c"/></svg> Aegis Clipper</div>
+  <div class=brand>%BRAND_LOGO% RoundLatch</div>
   <div class=settings-controls>
     <a class=settings-link id=backToLibrary href="/" hidden>Back to library</a>
   </div>
@@ -1077,7 +1282,7 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
   <div>
   <section class=step id=connection data-settings-panel hidden>
     <h2>Counter-Strike 2</h2>
-    <p class=hint>Connect CS2 so Aegis knows when to save your highlights.</p>
+    <p class=hint>Connect CS2 so RoundLatch knows when to save your highlights.</p>
     <div class=statusline id=detectOut role=status>Checking your Steam libraries…</div>
     <div class=foot>
       <button class=primary id=connectBtn>Connect CS2</button>
@@ -1093,7 +1298,7 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
     <div class=row><label for=rec_backend>Recorder</label><select id=rec_backend>
       <option value=builtin>Built-in</option><option value=obs>OBS Studio</option>
     </select></div>
-    <div class=row><label for=replay_hotkey>Save replay shortcut<small>Press a key combination here, then save. The shortcut works while Aegis runs in the background.</small></label>
+    <div class=row><label for=replay_hotkey>Save replay shortcut<small>Press a key combination here, then save. The shortcut works while RoundLatch runs in the background.</small></label>
       <div><input id=replay_hotkey readonly placeholder="Press a shortcut">
       <button class=ghost id=clearHotkey>Clear</button>
       <p class=statusline id=hotkeyStatus role=status></p></div>
@@ -1107,6 +1312,7 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
     <div class=row><label for=rec_gate>Capture only while CS2 is open</label><input type=checkbox id=rec_gate checked></div>
     <details id=qualityDetails><summary>Advanced capture quality</summary>
     <div class=row><label for=rec_preset>Quality preset<small id=qualityHint></small></label><select id=rec_preset>
+      <option value=light>Low impact · 540p at 24 fps</option>
       <option value=gpu_only>Direct GPU only · up to 30 fps</option>
       <option value=low>720p · 30 fps</option><option value=medium selected>900p · 30 fps</option>
       <option value=high>1080p · 60 fps</option><option value=source>Native · 60 fps</option>
@@ -1122,11 +1328,22 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
   </section>
   <section class=step id=storage data-settings-panel hidden>
     <h2>Clip storage</h2>
-    <p class=hint>Choose where Aegis saves new clips. Clips already in the library keep their original location.</p>
-    <div class=row><label for=clips_dir>Save clips to<small>Leave blank to use the default Aegis folder.</small></label>
+    <p class=hint>Choose where RoundLatch saves new clips. Clips already in the library keep their original location.</p>
+    <div class=row><label for=clips_dir>Save clips to<small>Leave blank to use the default clip folder.</small></label>
       <div><input id=clips_dir placeholder="Default clips folder" spellcheck=false>
       <button class=ghost id=browseClips hidden>Browse folders</button></div>
     </div>
+    <div class=row><label for=clipBudget>Clip storage budget (GiB)<small>Use 0 for no limit. Includes Recently deleted clips. Existing clips stay in place when the budget is full.</small></label>
+      <input id=clipBudget type=number min=0 max=4096 step=1 value=0></div>
+    <p class=hint id=budgetUsage></p>
+    <details>
+      <summary>Reconnect moved clips</summary>
+      <p class=hint>Enter the old and new folder paths. RoundLatch reconnects missing videos with matching filenames and subfolders.</p>
+      <div class=row><label for=oldClipFolder>Original folder</label><input id=oldClipFolder spellcheck=false></div>
+      <div class=row><label for=newClipFolder>Moved folder</label><input id=newClipFolder spellcheck=false></div>
+      <button id=reconnectClips>Reconnect clips</button>
+      <p id=reconnectStatus role=status></p>
+    </details>
   </section>
   <section class=step id=capture-test data-settings-panel hidden>
     <h2>Test recording</h2>
@@ -1134,13 +1351,14 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
     <div class=foot>
       <button class=primary id=captureBtn>Test screen capture</button>
       <button class=ghost id=previewBtn>Create sample clip</button>
+      <button class=ghost id=checkReplay>Verify replay shortcut and audio</button>
     </div>
     <div class=statusline id=testOut role=status></div>
     <video id=testVideo controls playsinline hidden></video>
   </section>
   <section class=step id=highlights data-settings-panel hidden>
     <h2>Automatic highlights</h2>
-    <p class=hint>Aegis joins short moments around kills and cuts longer gaps between them.</p>
+    <p class=hint>RoundLatch joins short moments around kills and cuts longer gaps between them.</p>
     <div class=row><label for=highlight_modes>Record highlights in</label><select id=highlight_modes>
       <option value=no_deathmatch>All modes except Deathmatch</option>
       <option value=competitive>Competitive, Premier, and Wingman</option>
@@ -1156,7 +1374,7 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
       <div class=row><label for=highlight_after>Seconds after each kill</label>
         <input id=highlight_after type=number min=.5 max=10 step=.25 value=1></div>
     </div>
-    <div class=row><label for=debounce>Streak gap in seconds<small>Aegis waits this long after a kill before saving the streak.</small></label><input id=debounce type=number min=1 max=30 step=.1 value=7></div>
+    <div class=row><label for=debounce>Streak gap in seconds<small>RoundLatch waits this long after a kill before saving the streak.</small></label><input id=debounce type=number min=1 max=30 step=.1 value=7></div>
     <div class=row><label for=minkills>Minimum kills</label><input id=minkills type=number min=1 max=10 value=1></div>
     <div class=row><label for=polish_en>Add clip intro and fades<small id=effectsHint></small></label><input type=checkbox id=polish_en checked></div>
   </section>
@@ -1204,6 +1422,7 @@ function showSettingsSection(section) {
     if (link.hash === '#' + section) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
+  if (section === 'storage') refreshClipBudget();
 }
 window.addEventListener('hashchange', () => showSettingsSection(location.hash.slice(1)));
 function message(id, text, type = '') {
@@ -1228,7 +1447,7 @@ async function loadExisting() {
   const r = c.recording || {}, o = c.obs || {}, e = c.engine || {}, u = c.uploads || {};
   const tg = u.telegram || {}, dc = u.discord || {}, yt = u.youtube || {};
   firstRun = c.first_run;
-  $('#settingsTitle').textContent = firstRun ? 'Set up Aegis Clipper' : 'Settings';
+  $('#settingsTitle').textContent = firstRun ? 'Set up RoundLatch' : 'Settings';
   $('#backToLibrary').hidden = firstRun;
   $('#finishBtn').textContent = firstRun ? 'Finish setup' : 'Save settings';
   $('#rec_backend').value = r.backend === 'obs' ? 'obs' : 'builtin';
@@ -1237,6 +1456,7 @@ async function loadExisting() {
   $('#audio_source').value = r.audio_source || (r.speaker_audio ? 'desktop' : 'off');
   $('#rec_compact').checked = Boolean(r.compact_video);
   $('#clips_dir').value = (c.storage || {}).clips_dir || '';
+  $('#clipBudget').value = c.storage?.budget_gib ?? 0;
   $('#replay_hotkey').value = (c.hotkeys || {}).replay || '';
   $('#rec_clip').value = r.clip_seconds ?? 30;
   $('#rec_gate').checked = r.only_when_game_running !== false;
@@ -1273,7 +1493,7 @@ function readSettings() {
   const before = $('#highlight_before');
   const after = $('#highlight_after');
   return {
-    storage:{clips_dir:$('#clips_dir').value.trim()},
+    storage:{clips_dir:$('#clips_dir').value.trim(), budget_gib:$('#clipBudget').valueAsNumber},
     hotkeys:{replay:$('#replay_hotkey').value},
     engine:{debounce_sec:$('#debounce').valueAsNumber, min_kills:$('#minkills').valueAsNumber,
       highlight_modes:$('#highlight_modes').value,
@@ -1304,11 +1524,13 @@ function hasChanges() {
 function renderSettings(status, type) {
   const obs = $('#rec_backend').value === 'obs';
   const gpuOnly = $('#rec_preset').value === 'gpu_only';
-  const prioritize = ($('#rec_performance').checked || gpuOnly) && !obs;
+  const light = $('#rec_preset').value === 'light';
+  const prioritize = ($('#rec_performance').checked || gpuOnly || light) && !obs;
   $('#builtinFields').hidden = obs;
   $('#obsFields').hidden = !obs;
   $('#captureBtn').hidden = obs;
-  $('#qualityHint').textContent = gpuOnly ? 'Uses native resolution and requires direct GPU capture.' :
+  $('#qualityHint').textContent = light ? 'Caps capture at 540p and 24 FPS and skips highlight effects.' :
+    gpuOnly ? 'Uses native resolution and requires direct GPU capture.' :
     prioritize ? 'Direct GPU capture uses desktop resolution and runs at up to 30 FPS.' : '';
   $('#testHelp').textContent = obs ? 'Start Replay Buffer in OBS, then use Save replay in the library. A sample clip checks playback.' :
     'Check five seconds of screen video outside a match. To check speaker audio, use Save replay while CS2 is open and playing sound.';
@@ -1331,6 +1553,12 @@ function renderSettings(status, type) {
 async function save() {
   const snapshot = readSettings();
   const obs = snapshot.recording.backend === 'obs';
+  if (!$('#clipBudget').checkValidity() || !Number.isInteger(snapshot.storage.budget_gib)) {
+    showSettingsSection('storage');
+    $('#clipBudget').focus();
+    message('#saveOut', 'Enter a whole-number storage budget between 0 and 4096 GiB.', 'err');
+    return false;
+  }
   const required = [obs ? '#obs_port' : '#rec_clip', '#debounce', '#minkills'];
   if (snapshot.engine.highlight_window === 'custom') required.push('#highlight_before', '#highlight_after');
   for (const field of required) {
@@ -1356,6 +1584,7 @@ async function save() {
   } else {
     savedSettings = snapshot;
     renderSettings(hasChanges() ? 'Unsaved changes' : 'Settings saved.', hasChanges() ? '' : 'ok');
+    if (patch.storage) refreshClipBudget();
     setTimeout(refreshShortcutStatus, 600);
   }
   return r.ok;
@@ -1400,6 +1629,19 @@ $('#clearHotkey').onclick = () => {
 function enableFolderPicker() {
   $('#browseClips').hidden = !window.pywebview?.api?.choose_clips_folder;
 }
+async function refreshClipBudget() {
+  const data = await api('/api/clip-storage');
+  const gib = bytes => (bytes / (1024 ** 3)).toLocaleString([], {maximumFractionDigits:2});
+  $('#budgetUsage').textContent = data.error || (gib(data.used_bytes) + ' GiB used' +
+    (data.budget_bytes ? ' of ' + gib(data.budget_bytes) + ' GiB.' : '.'));
+}
+$('#reconnectClips').onclick = () => busy($('#reconnectClips'), 'Checking…', async () => {
+  const result = await api('/api/clip-storage/relink',
+    jsonPost({old:$('#oldClipFolder').value.trim(), new:$('#newClipFolder').value.trim()}));
+  $('#reconnectStatus').textContent = result.error ||
+    (result.count ? 'Reconnected ' + result.count + (result.count === 1 ? ' clip.' : ' clips.') : 'No matching clips found.');
+  if (result.ok) refreshClipBudget();
+});
 window.addEventListener('pywebviewready', enableFolderPicker);
 enableFolderPicker();
 $('#browseClips').onclick = () => runSettings($('#browseClips'), 'Choosing…', async () => {
@@ -1432,7 +1674,7 @@ function testClip(button, capture) {
     const video = $('#testVideo');
     video.pause();
     video.hidden = true;
-    message('#testOut', capture ? 'Recording five seconds. Aegis will try another capture method if needed.' : 'Generating a sample with a test pattern and tone.');
+    message('#testOut', capture ? 'Recording five seconds. RoundLatch will try another capture method if needed.' : 'Generating a sample with a test pattern and tone.');
     const r = await api(capture ? '/api/capture-test' : '/api/test-clip', {method:'POST'}, 100000);
     if (!r.ok) { message('#testOut', r.detail || r.error || 'Could not create the clip.', 'err'); return; }
     video.src = '/clip/' + encodeURIComponent(r.clip_id) + '/video';
@@ -1441,6 +1683,16 @@ function testClip(button, capture) {
   });
 }
 $('#captureBtn').onclick = () => testClip($('#captureBtn'), true);
+$('#checkReplay').onclick = () => busy($('#checkReplay'), '', async () => {
+  if (firstRun) {
+    message('#testOut', 'Finish setup to start the live replay check.');
+    return;
+  }
+  if (!(await save())) return;
+  const result = await api('/api/verify-replay', jsonPost({action:'start'}));
+  if (result.ok) location.assign('/');
+  else message('#testOut', result.error || 'Could not start the replay check.', 'err');
+});
 $('#previewBtn').onclick = () => testClip($('#previewBtn'), false);
 $('#testVideo').onerror = () => message('#testOut', 'The test was saved but video playback failed.', 'err');
 $('#finishBtn').onclick = () => runSettings($('#finishBtn'), 'Saving…', async () => {
@@ -1477,7 +1729,7 @@ async function api(url, options, timeout = 15000) {
     if (!res.ok) return {...payload, ok:false, error:payload.error || payload.detail || 'Request failed (' + res.status + ').'};
     return payload;
   } catch (error) {
-    return {ok:false, error:error.name === 'TimeoutError' ? 'Aegis took too long to respond.' : 'Could not connect to Aegis. Check that the app is running.'};
+    return {ok:false, error:error.name === 'TimeoutError' ? 'RoundLatch took too long to respond.' : 'Could not connect to RoundLatch. Check that the app is running.'};
   }
 }
 async function busy(button, label, action) {
@@ -1501,8 +1753,8 @@ async function busy(button, label, action) {
 
 _EXIT_DIALOG = r"""
 <div class=modal id=exitDialog role=dialog aria-modal=true aria-labelledby=exitTitle><div class=dialog>
-  <h3 id=exitTitle>Close Aegis Clipper?</h3>
-  <p>Run Aegis in the background to keep saving highlights while you play.</p>
+  <h3 id=exitTitle>Close RoundLatch?</h3>
+  <p>Run RoundLatch in the background to keep saving highlights while you play.</p>
   <div class=dialog-actions>
     <button class=primary id=bgBtn>Run in background</button>
     <button class=ghost id=quitBtn>Quit</button>
@@ -1535,7 +1787,11 @@ _EXIT_DIALOG = r"""
       closeChoice();
     }
   });
-  background.onclick = () => { closeChoice(); window.pywebview?.api?.background(); };
+  background.onclick = () => {
+    closeChoice();
+    window.__roundLatchVisible?.(false);
+    window.pywebview?.api?.background();
+  };
   quit.onclick = () => {
     quit.disabled = true;
     quit.textContent = 'Quitting…';
@@ -1546,7 +1802,8 @@ _EXIT_DIALOG = r"""
 """
 
 def _shared(page: str) -> str:
-    return page.replace("%CSS%", _BASE_CSS).replace("%API_JS%", _API_JS).replace("%EXIT_DIALOG%", _EXIT_DIALOG)
+    return (page.replace("%CSS%", _BASE_CSS).replace("%API_JS%", _API_JS)
+            .replace("%EXIT_DIALOG%", _EXIT_DIALOG).replace("%BRAND_LOGO%", logo_svg()))
 
 
 DASHBOARD_HTML = _shared(DASHBOARD_HTML)

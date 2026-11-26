@@ -1,12 +1,12 @@
-# Build Aegis Clipper into a one-click Windows installer.
+# Build RoundLatch into a one-click Windows installer.
 #
 #   powershell -ExecutionPolicy Bypass -File packaging\build.ps1            # exe only
 #   powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Ffmpeg    # also vendor ffmpeg
 #   powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Installer # also build the .exe installer (needs Inno Setup)
 #
 # Run from the repo root. Produces:
-#   dist\AegisClipper\AegisClipper.exe         (the app)
-#   packaging\Output\AegisClipper-Setup.exe    (with -Installer)
+#   dist\RoundLatch\RoundLatch.exe         (the app)
+#   packaging\Output\RoundLatch-Setup.exe    (with -Installer)
 param(
     [switch]$Ffmpeg,
     [switch]$Installer,
@@ -19,7 +19,7 @@ Set-Location $root
 # Single source of truth for the version: aegis/__init__.py
 $verLine = Select-String -Path "aegis\__init__.py" -Pattern '__version__\s*=\s*"([^"]+)"'
 $AppVersion = $verLine.Matches[0].Groups[1].Value
-Write-Host "Building Aegis Clipper v$AppVersion" -ForegroundColor Cyan
+Write-Host "Building RoundLatch v$AppVersion" -ForegroundColor Cyan
 
 # 1. Build environment ----------------------------------------------------
 # Prefer an existing .venv; otherwise use the python already on PATH (CI sets one
@@ -90,16 +90,16 @@ if ($LASTEXITCODE -ne 0) { throw "Installer artwork generation failed" }
 Write-Host "Running PyInstaller..." -ForegroundColor Cyan
 & $py -m PyInstaller --noconfirm --clean packaging\aegis.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE)" }
-if (-not (Test-Path "dist\AegisClipper\AegisClipper.exe")) { throw "PyInstaller produced no exe" }
-Write-Host "App built -> dist\AegisClipper\AegisClipper.exe" -ForegroundColor Green
+if (-not (Test-Path "dist\RoundLatch\RoundLatch.exe")) { throw "PyInstaller produced no exe" }
+Write-Host "App built -> dist\RoundLatch\RoundLatch.exe" -ForegroundColor Green
 
 New-Item -ItemType Directory -Force "packaging\Output" | Out-Null
 
 # 4. Optionally produce a portable zip -----------------------------------
 if ($Portable) {
-    $zip = "packaging\Output\AegisClipper-portable.zip"
+    $zip = "packaging\Output\RoundLatch-portable.zip"
     if (Test-Path $zip) { Remove-Item $zip }
-    Compress-Archive -Path "dist\AegisClipper\*" -DestinationPath $zip
+    Compress-Archive -Path "dist\RoundLatch\*" -DestinationPath $zip
     Write-Host "Portable zip -> $zip" -ForegroundColor Green
 }
 
@@ -120,7 +120,8 @@ if ($Installer) {
 
     $iscc = @(
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $iscc) {
         throw "Inno Setup not found. Install it from https://jrsoftware.org/isinfo.php then re-run with -Installer."
@@ -128,6 +129,6 @@ if ($Installer) {
         Write-Host "Compiling installer with Inno Setup..." -ForegroundColor Cyan
         & $iscc "/DAppVersion=$AppVersion" "packaging\aegis.iss"
         if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed (exit $LASTEXITCODE)" }
-        Write-Host "Installer built -> packaging\Output\AegisClipper-Setup.exe" -ForegroundColor Green
+        Write-Host "Installer built -> packaging\Output\RoundLatch-Setup.exe" -ForegroundColor Green
     }
 }

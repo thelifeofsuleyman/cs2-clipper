@@ -5,12 +5,12 @@ body:
     id: symptoms
     attributes:
       label: What happened?
-      description: If relevant, include your game FPS with Aegis recording and with recording off.
+      description: Include your app version and the steps that reproduce the issue. For FPS reports, share the GPU, capture preset, and measured FPS with capture on and off in the same scene if possible.
     validations:
       required: true
   - type: textarea
     id: diagnostics
     attributes:
       label: Recorder diagnostics
-      description: In Aegis, open Activity and select Copy recorder diagnostics. Paste the report here if you want to share it publicly.
+      description: In RoundLatch (formerly Aegis Clipper), open Activity and select Copy recorder diagnostics. Paste the report here if you want to share it publicly.
       render: json

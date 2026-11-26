@@ -4,7 +4,7 @@ Pipeline (each step degrades gracefully — any failure returns the raw clip so 
 highlight is never lost):
   1. Pillow composes a designed intro CARD (1080p, transparent): the killer's
      circular Steam avatar, their name, a big "ACE"/"TRIPLE KILL" line, the map,
-     and a small Aegis mark.
+     and a small RoundLatch mark.
   2. ffmpeg overlays the card on the first few seconds (fading in/out) and applies
      a fade-in/out to the whole clip.
 
@@ -67,7 +67,7 @@ def make_intro_card(name: str, avatar: Path | None, kills: int,
             except Exception:
                 pass
         d.ellipse((cx - R - 5, cy - R - 5, cx + R + 5, cy + R + 5),
-                  outline=(255, 90, 60, 255), width=7)
+                  outline=(214, 245, 130, 255), width=7)
 
         def centered(text, font, y, fill):
             w = d.textlength(text, font=font)
@@ -77,14 +77,14 @@ def make_intro_card(name: str, avatar: Path | None, kills: int,
         centered(name, _font("bold", 60), cy + R + 26, (255, 255, 255, 255))
 
         big = KILL_BIG.get(kills, f"{kills} KILLS")
-        centered(big, _font("black", 150), cy + R + 110, (255, 90, 60, 255))
+        centered(big, _font("black", 150), cy + R + 110, (214, 245, 130, 255))
 
         sub = (map_name or "").replace("de_", "").replace("_", " ").upper()
         if sub:
             centered(sub, _font("reg", 44), cy + R + 290, (185, 195, 208, 255))
 
-        # subtle Aegis mark
-        centered("▸ AEGIS CLIPPER", _font("bold", 30), int(H * 0.90), (140, 150, 165, 220))
+        # subtle RoundLatch mark
+        centered("▸ ROUNDLATCH", _font("bold", 30), int(H * 0.90), (140, 150, 165, 220))
 
         out_png.parent.mkdir(parents=True, exist_ok=True)
         img.save(out_png)

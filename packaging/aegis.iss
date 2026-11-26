@@ -1,6 +1,6 @@
-; Inno Setup script for Aegis Clipper.
+; Inno Setup script for RoundLatch.
 ;
-; Wraps the PyInstaller output (dist\AegisClipper) into one signed-able installer
+; Wraps the PyInstaller output (dist\RoundLatch) into one signed-able installer
 ; exe. Produces a Start-menu shortcut, an optional desktop icon, an optional
 ; "launch at Windows startup" task, and launches the app (which opens the setup
 ; wizard in the browser on first run).
@@ -8,32 +8,34 @@
 ; Build:
 ;   1. pyinstaller packaging\aegis.spec        (from repo root)
 ;   2. open this file in Inno Setup Compiler (or: iscc packaging\aegis.iss)
-; Output: packaging\Output\AegisClipper-Setup.exe
+; Output: packaging\Output\RoundLatch-Setup.exe
 
-#define AppName "Aegis Clipper"
+#define AppName "RoundLatch"
 ; Version is single-sourced from aegis/__init__.py; build.ps1 passes it via
 ; /DAppVersion=x.y.z. The fallback here keeps a manual `iscc aegis.iss` working.
 #ifndef AppVersion
   #define AppVersion "2.0.0"
 #endif
+; Keep the installed executable path stable for existing pins and shortcuts.
 #define AppExe "AegisClipper.exe"
 
 [Setup]
 AppId={{A3G15C71-CL1P-4PER-CS22-AEG1SCLIPPER}}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=Aegis Clipper
-DefaultDirName={autopf}\AegisClipper
+AppPublisher=RoundLatch
+DefaultDirName={autopf}\RoundLatch
 DefaultGroupName={#AppName}
+UsePreviousGroup=no
 DisableProgramGroupPage=yes
 OutputDir=Output
-OutputBaseFilename=AegisClipper-Setup
+OutputBaseFilename=RoundLatch-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern dark
 WizardImageFile=vendor\wizard-art.png
 WizardSmallImageFile=vendor\wizard-mark.png
-SetupIconFile=aegis.ico
+SetupIconFile=roundlatch.ico
 DisableWelcomePage=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -44,6 +46,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 ; Stamp the binary so the in-app updater and Windows see the new version.
 VersionInfoVersion={#AppVersion}
 UninstallDisplayName={#AppName}
+UninstallDisplayIcon={app}\{#AppExe}
 ; Use the Restart Manager to close a running AegisClipper.exe during a /SILENT
 ; update and relaunch it afterwards, so files can be swapped without a reboot.
 CloseApplications=yes
@@ -55,9 +58,9 @@ RestartApplications=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
-WelcomeLabel1=Install Aegis Clipper
+WelcomeLabel1=Install RoundLatch
 WelcomeLabel2=Set up automatic CS2 highlights and a local clip library.%n%nSetup will guide you through installation.
-WizardInstalling=Installing Aegis Clipper
+WizardInstalling=Installing RoundLatch
 InstallingLabel=Setup is installing the app and its recording tools.
 
 [Tasks]
@@ -66,7 +69,8 @@ Name: "startup"; Description: "Start {#AppName} automatically when Windows start
 
 [Files]
 ; Bundle the entire PyInstaller dist folder.
-Source: "..\dist\AegisClipper\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\dist\RoundLatch\RoundLatch.exe"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignoreversion
+Source: "..\dist\RoundLatch\_internal\*"; DestDir: "{app}\_internal"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; WebView2 evergreen bootstrapper — only shipped/run when the runtime is missing.
 Source: "vendor\MicrosoftEdgeWebView2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: NeedsWebView2
 
@@ -76,6 +80,15 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 ; "startup" task: a shortcut in the user's Startup folder.
 Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup
+
+[InstallDelete]
+; Replace the shortcuts created by the old installer. Inno keeps previous task
+; selections and creates the new desktop and startup shortcuts accordingly.
+Type: files; Name: "{autoprograms}\Aegis Clipper\Aegis Clipper.lnk"
+Type: files; Name: "{autoprograms}\Aegis Clipper\Uninstall Aegis Clipper.lnk"
+Type: dirifempty; Name: "{autoprograms}\Aegis Clipper"
+Type: files; Name: "{autodesktop}\Aegis Clipper.lnk"
+Type: files; Name: "{userstartup}\Aegis Clipper.lnk"
 
 [Run]
 ; Ensure the WebView2 runtime (the native window needs it) before first launch.

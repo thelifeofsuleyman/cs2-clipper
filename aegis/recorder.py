@@ -43,6 +43,7 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 # Quality presets -> (width, height, fps, video bitrate). "source" keeps native size.
 PRESETS: dict[str, tuple] = {
     "gpu_only": (0, 0, 30, "8M"),
+    "light":  (960, 540, 24, "3M"),
     "low":    (1280, 720, 30, "6M"),    # low-end friendly
     "medium": (1600, 900, 30, "10M"),
     "high":   (1920, 1080, 60, "16M"),
@@ -91,7 +92,7 @@ def capture_candidates(ffmpeg: str, cfg: Config) -> list[tuple[str, str]]:
     preset = cfg.get("recording.preset")
     if preset == "gpu_only":
         return [("ddagrab-d3d11", encoder) for encoder in choices if encoder in _D3D11_ENCODERS]
-    prefer_direct = cfg.game_fps_priority() or preset == "source"
+    prefer_direct = preset != "light" and (cfg.game_fps_priority() or preset == "source")
     candidates = []
     for method in methods:
         if method == "ddagrab" and prefer_direct:
@@ -129,6 +130,8 @@ def _encoder_args(encoder: str, bitrate: str, performance: bool = False,
 
 def capture_options(cfg: Config, encoder: str) -> tuple[int, int, int, str]:
     preset = cfg.get("recording.preset", "medium")
+    if preset == "light":
+        return PRESETS["light"]
     w, h, fps, bitrate = PRESETS.get(preset, PRESETS["medium"])
     fps = int(cfg.get("recording.fps", fps) or fps)
     if cfg.game_fps_priority():
@@ -549,6 +552,8 @@ class BuiltinRecorder(Recorder):
         self._health.flush()
 
     def _capture_failed(self, reason: str) -> None:
+        if self._health is not None:
+            self._health.add(capture_errors=1)
         with self._lock:
             err = self._stderr
             if err:
@@ -684,7 +689,7 @@ class BuiltinRecorder(Recorder):
             log(f"Built-in recorder concat failed: {e}")
             if isinstance(e, OSError):
                 self._save_error = ("The save drive or replay buffer drive is full." if paths.disk_full(e)
-                                    else "Aegis could not read the buffer or write to the clip folder.")
+                                    else "RoundLatch could not read the buffer or write to the clip folder.")
             out_path.unlink(missing_ok=True)
             return None
         if r.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
@@ -712,6 +717,7 @@ class BuiltinRecorder(Recorder):
                 audio = "capturing" if speaker.ready.is_set() else "unavailable" if ready else "waiting"
                 audio_detail = speaker.detail
         return {"backend": "builtin", "capturing": ready, "encoder": self._encoder, "fps": self._fps,
+                "cpu_encoding": ready and self._encoder == "libx264",
                 "method": self._method, "state": self._stage, "detail": self._detail, "audio": audio,
                 "audio_source": source, "audio_detail": audio_detail,
                 "replay_available": ready or bool(retained), "replay_expires_in": retained,
@@ -741,7 +747,7 @@ class ObsRecorder(Recorder):
         replay_end = time.monotonic()
         requested_at = time.time()
         if not self.obs.save_replay_buffer():
-            self._save_error = "Start the Replay Buffer in OBS and check its connection to Aegis."
+            self._save_error = "Start the Replay Buffer in OBS and check its connection to RoundLatch."
             return None
         source = _wait_for_new_clip(replay_dir, float(self.cfg.get("engine.clip_wait_sec", 8)), requested_at)
         if not source:

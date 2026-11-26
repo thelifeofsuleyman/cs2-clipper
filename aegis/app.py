@@ -60,10 +60,9 @@ def _banner(cfg: config.Config, port: int) -> None:
 
 # ───────── tray icon (shared by the window and browser paths) ─────────
 def _tray_image():
-    from PIL import Image, ImageDraw
-    img = Image.new("RGB", (64, 64), "#0d1017")
-    ImageDraw.Draw(img).ellipse((16, 16, 48, 48), fill="#ff5a3c")
-    return img
+    from .brand import logo_image
+
+    return logo_image(64)
 
 
 def _clips_folder(cfg) -> str:
@@ -241,6 +240,7 @@ def _start_tray_for_window(window, cfg, quit_window):
     def _show(icon, item):
         try:
             window.show()
+            window.evaluate_js("window.__roundLatchVisible?.(true)")
         except Exception as e:
             log(f"Could not show window: {e}")
 
@@ -248,9 +248,9 @@ def _start_tray_for_window(window, cfg, quit_window):
         quit_window()
 
     icon = pystray.Icon(
-        "aegis", _tray_image(), APP_NAME,
+        "roundlatch", _tray_image(), APP_NAME,
         menu=pystray.Menu(
-            pystray.MenuItem("Open Aegis Clipper", _show, default=True),
+            pystray.MenuItem("Open RoundLatch", _show, default=True),
             pystray.MenuItem("Open clips folder",
                              lambda i, it: _open_folder(_clips_folder(cfg))),
             pystray.MenuItem("Quit", _quit),
@@ -274,18 +274,23 @@ def _tray_notices(icon, engine):
 
     def monitor():
         warned = set()
+        cpu_warned = False
         while not stop.is_set():
             try:
+                cpu = bool(engine.recorder.status().get("cpu_encoding"))
+                if cpu and not cpu_warned and icon.visible:
+                    _notify_tray(icon, "Recording is using the CPU. If CS2 slows down, try Low impact in RoundLatch.")
+                cpu_warned = cpu
                 status = engine.storage_status()
                 if status and icon.visible:
                     low = {key for key, value in status.items() if value.get("low")}
                     if low - warned:
                         drive = ("the clip and replay buffer drives" if len(low) == 2 else
                                  "the clip drive" if "clips" in low else "the replay buffer drive")
-                        _notify_tray(icon, f"Low space on {drive}. Open Aegis to review large clips.")
+                        _notify_tray(icon, f"Low space on {drive}. Open RoundLatch to review large clips.")
                     warned = low
             except Exception as exc:
-                log(f"Could not check storage or show its notification: {exc}")
+                log(f"Could not check recorder or storage notifications: {exc}")
             stop.wait(15)
 
     threading.Thread(target=monitor, daemon=True).start()
@@ -308,7 +313,7 @@ def _run_tray_browser(cfg, port: int, engine) -> None:
         return
 
     icon = pystray.Icon(
-        "aegis", _tray_image(), APP_NAME,
+        "roundlatch", _tray_image(), APP_NAME,
         menu=pystray.Menu(
             pystray.MenuItem("Open dashboard", lambda i, it: webbrowser.open(url), default=True),
             pystray.MenuItem("Open clips folder",
@@ -372,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
     # If an instance is already serving on this port, just open it and exit so a
     # double-launch doesn't crash trying to bind a busy port.
     if _existing_instance(port):
-        log("Aegis Clipper is already running — opening the dashboard.")
+        log("RoundLatch is already running — opening the dashboard.")
         if not headless:
             webbrowser.open(f"http://127.0.0.1:{port}/")
         return 0
@@ -388,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         serve = _make_server(app, port)
     except (OSError, SystemExit) as e:
-        message = f"Aegis could not open its local dashboard on port {port}. Close the conflicting app and try again."
+        message = f"{APP_NAME} could not open its local dashboard on port {port}. Close the conflicting app and try again."
         log(f"{message} ({e})")
         if not headless and sys.platform == "win32":
             import ctypes

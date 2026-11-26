@@ -9,8 +9,8 @@ from . import paths
 from .log import log
 
 COUNTERS = (
-    "capture_attempts", "capture_ready", "capture_start_ms",
-    "save_attempts", "saves", "save_ms", "frames_output", "frames_dropped",
+    "capture_attempts", "capture_ready", "capture_start_ms", "capture_errors",
+    "save_attempts", "saves", "save_ms", "clips_saved", "save_errors", "frames_output", "frames_dropped",
 )
 
 

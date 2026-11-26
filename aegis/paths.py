@@ -1,9 +1,10 @@
 """Per-user data and config directories.
 
-Everything Aegis writes at runtime lives under one root so an installed copy
+Everything RoundLatch writes at runtime lives under one root so an installed copy
 keeps zero state next to the program files. On Windows that root is
 ``%APPDATA%\\AegisClipper``; elsewhere it falls back to ``~/.aegis-clipper``.
 
+The directory name stays compatible with Aegis Clipper installations.
 Set ``AEGIS_DATA_DIR`` to override (handy for dev — keep state inside the repo).
 """
 from __future__ import annotations

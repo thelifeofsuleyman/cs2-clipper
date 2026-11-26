@@ -52,13 +52,18 @@ class BatchExports:
                         job["items"][index]["state"] = "working"
         return result
 
-    def add(self, clip_ids: list[str], limit: int) -> dict:
+    def add(self, clip_ids: list[str], limit: int, *, window: tuple[float, float] | None = None) -> dict:
         clips = [self.catalog.get(clip_id) for clip_id in clip_ids]
-        if any(not c or not c.match_id or not c.exists() for c in clips):
-            raise ValueError("Choose available clips from Matches.")
+        if any(not c or not c.exists() for c in clips):
+            raise ValueError("Choose an available clip.")
+        if window is not None and len(clips) != 1:
+            raise ValueError("Choose one clip to export a selection.")
         job = {"id": uuid.uuid4().hex, "max_mb": limit, "items": [
             {"clip_id": c.id, "title": c.title or Path(c.path).stem, "state": "queued"} for c in clips
         ]}
+        if window is not None:
+            job["items"][0]["window"] = window
+            job["items"][0]["title"] += " (selection)"
         with self._lock:
             self._write(job)
             self._jobs[job["id"]] = job
@@ -136,8 +141,9 @@ class BatchExports:
         directory = self._root / job["id"]
         if not self.can_export():
             raise media.ExportPaused
+        window = job["items"][index].get("window")
         with source.open("rb") as original:
-            data = original.read(limit + 1) if source.stat().st_size <= limit else b""
+            data = original.read(limit + 1) if window is None and source.stat().st_size <= limit else b""
         copy_original = 0 < len(data) <= limit
         suffix = source.suffix.lower() if copy_original else ".mp4"
         staged = directory / f".{index}-pending{suffix}"
@@ -146,7 +152,8 @@ class BatchExports:
                 staged.write_bytes(data)
             else:
                 ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
-                if not media.reencode_to_fit(ffmpeg, source, staged, limit, pause=lambda: not self.can_export()):
+                options = {"window": window} if window is not None else {}
+                if not media.reencode_to_fit(ffmpeg, source, staged, limit, pause=lambda: not self.can_export(), **options):
                     return None
             if not self.can_export():
                 raise media.ExportPaused

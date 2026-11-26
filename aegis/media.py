@@ -273,13 +273,23 @@ def make_thumbnail(ffmpeg: str | None, video: Path, clip_id: str) -> Path | None
     return out if (r.returncode == 0 and out.exists()) else None
 
 
-def reencode_to_fit(ffmpeg: str | None, video: Path, out: Path, max_bytes: int, *, pause=None) -> bool:
+def reencode_to_fit(ffmpeg: str | None, video: Path, out: Path, max_bytes: int, *,
+                    pause=None, window: tuple[float, float] | None = None) -> bool:
     """Make a shareable MP4 within a byte cap. The caller owns the scratch directory."""
     if not ffmpeg:
         return False
     duration, audio = stream_info(ffmpeg, video)
     if duration <= 0:
         return False
+    seek = []
+    length = []
+    if window is not None:
+        start, end = window
+        if not 0 <= start < end <= duration + 0.1 or min(end, duration) - start < 0.249:
+            return False
+        duration = min(end, duration) - start
+        seek = ["-ss", f"{start:.3f}"]
+        length = ["-t", f"{duration:.3f}"]
     audio_kbps = 128 if audio else 0
     budget_kbps = max_bytes * 8 / duration / 1000
     for headroom in (0.90, 0.76):
@@ -287,7 +297,7 @@ def reencode_to_fit(ffmpeg: str | None, video: Path, out: Path, max_bytes: int, 
         if video_kbps < 150:
             return False
         cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-               "-protocol_whitelist", "file,pipe", "-threads", "2", "-i", str(video),
+               "-protocol_whitelist", "file,pipe", "-threads", "2", *seek, "-i", str(video), *length,
                "-map", "0:v:0", "-map", "0:a:0?", "-map_metadata", "-1", "-map_chapters", "-1",
                "-filter_threads", "1"]
         if video_kbps < 2200:

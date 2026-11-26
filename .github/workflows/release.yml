@@ -3,7 +3,7 @@
 # Trigger: push a tag like `v2.1.0` (or run the workflow manually). The job
 # installs standard CPython, builds the PyInstaller app with a bundled ffmpeg,
 # compiles the Inno Setup installer, zips a portable copy, and attaches both
-# AegisClipper-Setup.exe and AegisClipper-portable.zip to the GitHub Release.
+# RoundLatch-Setup.exe and RoundLatch-portable.zip to the GitHub Release.
 #
 # Result: you never need a local Python toolchain — tag a version and the
 # finished .exe shows up under Releases for anyone to download.
@@ -90,11 +90,11 @@ jobs:
       - name: Upload Windows packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: AegisClipper
+          name: RoundLatch
           if-no-files-found: error
           path: |
-            packaging/Output/AegisClipper-Setup.exe
-            packaging/Output/AegisClipper-portable.zip
+            packaging/Output/RoundLatch-Setup.exe
+            packaging/Output/RoundLatch-portable.zip
 
   publish:
     needs: build-windows
@@ -105,12 +105,20 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: AegisClipper
+          name: RoundLatch
       - name: Publish to GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          test -s AegisClipper-Setup.exe && test -s AegisClipper-portable.zip || exit 1
-          gh release create "$RELEASE_TAG" --verify-tag --generate-notes AegisClipper-Setup.exe AegisClipper-portable.zip
+          test -s RoundLatch-Setup.exe && test -s RoundLatch-portable.zip || exit 1
+          assets=(RoundLatch-Setup.exe RoundLatch-portable.zip)
+          notes=(--generate-notes)
+          if [[ "$RELEASE_TAG" == v2.1.27 ]]; then
+            # Old clients look for this asset by its exact name.
+            cp RoundLatch-Setup.exe AegisClipper-Setup.exe
+            assets+=("AegisClipper-Setup.exe#Installer for automatic upgrades from Aegis Clipper")
+            notes=(--notes-from-tag)
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --title "RoundLatch $RELEASE_TAG" "${notes[@]}" "${assets[@]}"

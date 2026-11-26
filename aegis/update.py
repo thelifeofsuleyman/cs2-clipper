@@ -34,8 +34,10 @@ from .log import log
 _REPO = "thelifeofsuleyman/cs2-clipper"
 _RELEASES = f"https://github.com/{_REPO}/releases"
 _API = f"https://api.github.com/repos/{_REPO}/releases/latest"
-_INSTALLER = "AegisClipper-Setup.exe"
-_PORTABLE = "AegisClipper-portable.zip"
+_INSTALLER = "RoundLatch-Setup.exe"
+_DOWNLOAD_ASSETS = {
+    _INSTALLER, "RoundLatch-portable.zip", "AegisClipper-Setup.exe", "AegisClipper-portable.zip",
+}
 _MAX_INSTALLER_BYTES = 512 * 1024 * 1024
 
 
@@ -139,7 +141,7 @@ def _fetch_release(cfg: Config) -> ReleaseCheck:
     if not isinstance(tag, str) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
         return ReleaseCheck()
     counts = {a["name"]: a["download_count"] for a in data["assets"] if isinstance(a, dict)
-              and a.get("name") in (_INSTALLER, _PORTABLE)
+              and isinstance(a.get("name"), str) and a["name"] in _DOWNLOAD_ASSETS
               and a.get("browser_download_url") == f"{_RELEASES}/download/{tag}/{a['name']}"
               and type(a.get("download_count")) is int and a["download_count"] >= 0}
     downloads = sum(counts.values()) if counts else None
@@ -217,7 +219,7 @@ def _download_and_install(info: UpdateInfo) -> None:
 
     directory = None
     try:
-        directory = Path(tempfile.mkdtemp(prefix="AegisClipper-update-"))
+        directory = Path(tempfile.mkdtemp(prefix="RoundLatch-update-"))
         dest = directory / _INSTALLER
         total = info.size
         if (info.asset_url != f"{_RELEASES}/download/v{info.version}/{_INSTALLER}"

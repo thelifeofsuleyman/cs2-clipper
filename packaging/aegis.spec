@@ -1,4 +1,4 @@
-# PyInstaller spec for Aegis Clipper.
+# PyInstaller spec for RoundLatch.
 #
 # Builds a single windowed executable (no console) that bundles the engine, web
 # dashboard, GSI .cfg template, and — if present — a vendored ffmpeg. The web
@@ -6,7 +6,7 @@
 # files to chase.
 #
 # Build:  pyinstaller packaging/aegis.spec   (run from the repo root)
-# Output: dist/AegisClipper/AegisClipper.exe
+# Output: dist/RoundLatch/RoundLatch.exe
 #
 # To bundle ffmpeg, drop ffmpeg.exe (and ffprobe.exe) into packaging/vendor/
 # before building; otherwise the app falls back to ffmpeg on PATH at runtime.
@@ -90,12 +90,12 @@ try:
         ffi=FixedFileInfo(filevers=_vt, prodvers=_vt),
         kids=[
             StringFileInfo([StringTable("040904B0", [
-                StringStruct("CompanyName", "Aegis Clipper"),
-                StringStruct("FileDescription", "Aegis Clipper — automatic CS2 highlight clipper"),
+                StringStruct("CompanyName", "RoundLatch"),
+                StringStruct("FileDescription", "RoundLatch — automatic CS2 highlight clipper"),
                 StringStruct("FileVersion", _ver),
-                StringStruct("InternalName", "AegisClipper"),
-                StringStruct("OriginalFilename", "AegisClipper.exe"),
-                StringStruct("ProductName", "Aegis Clipper"),
+                StringStruct("InternalName", "RoundLatch"),
+                StringStruct("OriginalFilename", "RoundLatch.exe"),
+                StringStruct("ProductName", "RoundLatch"),
                 StringStruct("ProductVersion", _ver),
                 StringStruct("LegalCopyright", "MIT License"),
             ])]),
@@ -125,10 +125,10 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
-    name="AegisClipper",
+    name="RoundLatch",
     console=False,                      # windowed app; logs go to the tray/dashboard
     version=version_obj,                # embedded Windows version metadata
-    icon=os.path.join(ROOT, "packaging", "aegis.ico") if os.path.exists(
-        os.path.join(ROOT, "packaging", "aegis.ico")) else None,
+    icon=os.path.join(ROOT, "packaging", "roundlatch.ico") if os.path.exists(
+        os.path.join(ROOT, "packaging", "roundlatch.ico")) else None,
 )
-coll = COLLECT(exe, a.binaries, a.datas, name="AegisClipper")
+coll = COLLECT(exe, a.binaries, a.datas, name="RoundLatch")

@@ -26,7 +26,8 @@ from .log import log
 
 DEFAULTS: dict[str, Any] = {
     "first_run": True,
-    "storage": {"clips_dir": ""},
+    "verify_first_replay": False,
+    "storage": {"clips_dir": "", "budget_gib": 0},
     "hotkeys": {"replay": ""},
     "metrics": {"enabled": False},
     "engine": {
@@ -74,7 +75,7 @@ DEFAULTS: dict[str, Any] = {
         "fade": True,               # fade in/out
         "intro": True,              # show killer's Steam name + avatar + kill text
         "intro_seconds": 3.0,
-        "watermark": True,          # subtle Aegis mark
+        "watermark": True,          # subtle RoundLatch mark
     },
     "montage": {
         "music_path": "",
@@ -149,7 +150,12 @@ class Config:
         return 2.0, 1.0
 
     def game_fps_priority(self) -> bool:
-        return bool(self.get("recording.prioritize_game_fps", True)) or self.get("recording.preset") == "gpu_only"
+        return (bool(self.get("recording.prioritize_game_fps", True))
+                or self.get("recording.preset") in ("gpu_only", "light"))
+
+    def clip_budget_bytes(self) -> int:
+        budget = self.get("storage.budget_gib", 0)
+        return budget * 1024**3 if type(budget) is int and 0 < budget <= 4096 else 0
 
     def save(self) -> None:
         with self._lock:

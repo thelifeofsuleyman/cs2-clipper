@@ -57,6 +57,9 @@ class SpeakerBuffer(AudioBuffer):
         super().__init__(history, 0, 0)
         self._device = None
         self._stream = None
+        self._clock_offset: float | None = None
+        self._next_frame_at: float | None = None
+        self._input_overflow = 0
 
     def start(self) -> bool:
         try:
@@ -67,6 +70,10 @@ class SpeakerBuffer(AudioBuffer):
             self._channels = int(output["maxInputChannels"])
             self._rate = int(output["defaultSampleRate"])
             self._continue = pa.paContinue
+            self._input_overflow = pa.paInputOverflow
+            self._clock_offset = self._next_frame_at = None
+            with self._lock:
+                self._samples.clear()
             self._stream = self._device.open(
                 format=pa.paInt16, channels=self._channels, rate=self._rate,
                 frames_per_buffer=1024, input=True, input_device_index=output["index"],
@@ -78,10 +85,24 @@ class SpeakerBuffer(AudioBuffer):
             log(f"Speaker audio unavailable: {exc}")
             return False
 
-    def _receive(self, data, frame_count, time_info, _status):
-        now = time.monotonic()
+    def _receive(self, data, frame_count, time_info, status):
+        if not data or len(data) != frame_count * self._channels * 2:
+            return None, self._continue
+        arrived = time.perf_counter()
+        if self._clock_offset is None:
+            self._clock_offset = time.monotonic() - arrived
+        now = arrived + self._clock_offset
+        duration = frame_count / self._rate
         lag = time_info["current_time"] - time_info["input_buffer_adc_time"]
-        start = now - (lag if 0 < lag < 1 else frame_count / self._rate)
+        start = now - (lag if 0 < lag < 1 else duration)
+        if self._next_frame_at is not None:
+            # Callback wake-up jitter must not cause successive PCM blocks
+            # to overwrite one another or leave holes in continuous audio.
+            if status & self._input_overflow or start - self._next_frame_at > max(.1, 4 * duration):
+                start = max(start, self._next_frame_at)
+            else:
+                start = self._next_frame_at
+        self._next_frame_at = start + duration
         self._append(start, data, now)
         return None, self._continue
 
@@ -136,7 +157,7 @@ class ProcessAudioBuffer(AudioBuffer):
             elif not pid:
                 self.detail = "Waiting for the CS2 audio process."
             elif not self._helper.is_file():
-                self.detail = "The CS2 audio helper is missing. Reinstall Aegis Clipper."
+                self.detail = "The CS2 audio helper is missing. Reinstall RoundLatch."
             else:
                 self._retry_at = now + 15
                 try:
@@ -175,9 +196,13 @@ class ProcessAudioBuffer(AudioBuffer):
                 duration = size / (4 * self._rate)
                 now = time.perf_counter() + offset
                 start = stamp / 10_000_000 + offset
-                if not stamp or not -0.05 <= now - start <= 2:
+                valid_stamp = stamp and -0.05 <= now - start <= 2
+                if not valid_stamp:
                     start = now - duration
-                if previous_end is not None and abs(start - previous_end) < 0.001:
+                # Honor real silence from the helper when the QPC timestamp
+                # is valid. Pipe arrival can bunch up when it isn't.
+                slack = .001 if valid_stamp else max(.1, 4 * duration)
+                if previous_end is not None and start - previous_end < slack:
                     start = previous_end
                 self._append(start, data, now)
                 previous_end = start + duration

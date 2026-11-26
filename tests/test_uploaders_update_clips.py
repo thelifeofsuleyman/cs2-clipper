@@ -123,6 +123,7 @@ def test_catalog_add_update_remove_persist(data_dir):
     assert cat.update("a1", title="My Ace", favorite=True).favorite
     # reload from disk -> persisted
     assert Catalog().get("a1").title == "My Ace"
+    cat.update("a1", favorite=False)
     assert cat.remove("a1")
     assert Catalog().get("a1") is None
 

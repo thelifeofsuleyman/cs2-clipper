@@ -73,7 +73,7 @@ def test_share_copy_respects_size_limit_and_clears_scratch(app_client, data_dir,
     from aegis import media
     from aegis.clips import Clip
 
-    client, _, catalog, _ = app_client
+    client, _, catalog, engine = app_client
     source = data_dir / "recording.mp4"
     source.write_bytes(b"original")
     catalog.add(Clip(id="video", path=str(source), created=1))
@@ -86,14 +86,16 @@ def test_share_copy_respects_size_limit_and_clears_scratch(app_client, data_dir,
         content.truncate(10_000_001)
     output_paths = []
 
-    def encode(ffmpeg, video, out, max_bytes):
+    def encode(ffmpeg, video, out, max_bytes, *, pause):
         assert video == source and max_bytes == 10_000_000
+        assert not pause()
         output_paths.append(out)
         out.write_bytes(b"fit video")
         return True
 
     monkeypatch.setattr(media, "resolve_ffmpeg", lambda _: "ffmpeg")
     monkeypatch.setattr(media, "reencode_to_fit", encode)
+    monkeypatch.setattr(engine, "can_batch_export", lambda: True)
     exported = client.post(url, json={"max_mb": 10})
     assert exported.mimetype == "video/mp4" and exported.data == b"fit video"
     assert "recording-share.mp4" in exported.headers["Content-Disposition"]
