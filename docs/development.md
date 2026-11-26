@@ -85,19 +85,11 @@ chooses when and where to share the copied report.
 
 ## CS2 demo benchmark
 
-The Windows test replayed the same Nuke demo section from tick 3,850 for about
-24 seconds per pass on a GeForce GTX 1650. Capture-on passes used direct D3D11,
-NVENC, and desktop audio. Average FPS and 1% lows are estimates from CS2's
-integer FPS histogram. The 1% low is the effective FPS of the slowest 1% of
-frames. These short demo passes measure replay performance on one PC.
+To measure capture overhead, pick one section of a CS2 demo and start each run
+from the same tick. Run with capture off and on at the same game resolution and
+settings. Repeat both conditions, then compare average FPS and 1% lows across
+the runs. Record the capture method, encoder, frame rate, and audio source
+alongside your measurements.
 
-| Capture condition | Runs | Average FPS | 1% low FPS |
-| --- | ---: | ---: | ---: |
-| Capture off | 2 | 101.6–110.8 | 51.8–65.6 |
-| Existing 30 FPS preset | 1 | 84.7 | 43.3 |
-| 24 FPS trial | 2 | 80.5–92.2 | 34.9–42.3 |
-| 18 FPS trial | 1 | 87.0 | 34.4 |
-
-Reducing capture FPS had inconsistent results, so the default frame rates stay
-as they were. The optional **Direct GPU only** preset limits capture to the
-D3D11 hardware path. It reports an error when that path is unavailable.
+**Direct GPU only** limits capture to the D3D11 hardware path. The dashboard
+reports a capture error if that path is unavailable.
