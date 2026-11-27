@@ -22,7 +22,8 @@ settings, clip catalog, and recordings.
 2. Open CS2, or restart it if it was already running. The dashboard shows
    **CS2 connected** and **Replay buffer ready** when both are active.
 3. Get a kill in a practice match. The clip appears in your library after
-   your streak ends. Use **Save replay** anytime the buffer is ready.
+   the round ends in round-based modes. Use **Save replay** anytime the buffer is ready.
+   In **Matches**, use **Merge round clips** to combine older automatic clips from the same round.
 
 The **Check your first replay** card helps you connect CS2, assign and test a
 shortcut, and play back a clip to check its picture and sound. Open **Settings

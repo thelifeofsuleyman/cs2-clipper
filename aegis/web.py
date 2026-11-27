@@ -463,6 +463,27 @@ def create_app(cfg: Config, catalog: Catalog, engine: Engine) -> Flask:
         return _placeholder_thumb()
 
     # ───────── montage ─────────
+    @app.post("/api/merge-round")
+    def api_merge_round():
+        body = request.get_json(silent=True)
+        ids = body.get("clip_ids") if isinstance(body, dict) else None
+        if (not isinstance(ids, list) or not 2 <= len(ids) <= MAX_CLIPS
+                or any(not isinstance(item, str) or len(item) > 128 for item in ids)
+                or len(set(ids)) != len(ids)):
+            return jsonify(error=f"Choose 2 to {MAX_CLIPS} different clips."), 400
+        if not engine.can_batch_export():
+            return jsonify(error="Merge clips after the match or with CS2 closed."), 409
+
+        def merge():
+            try:
+                clip = engine.merge_round_clips(ids)
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
+            return jsonify(ok=True, clip=_clip_json(clip)) if clip else (
+                jsonify(error="Could not merge these clips. See Activity."), 422)
+
+        return run_media_job(merge, clip_edit)
+
     @app.post("/api/montage")
     def api_montage():
         body = request.get_json(silent=True)

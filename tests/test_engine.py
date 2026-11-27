@@ -170,3 +170,66 @@ def test_min_kills_gate_skips_solo(cfg):
 
     assert eng.recorder.calls == 0
     assert eng.catalog.list() == []
+
+def test_competitive_round_groups_widely_spaced_kills_after_spectating(cfg, monkeypatch):
+    engine = Engine(cfg, Catalog())
+    engine.recorder = FakeRecorder()
+    now = time.monotonic()
+    timers = []
+
+    def start_timer(timer):
+        timers.append(timer)
+
+    monkeypatch.setattr("aegis.engine.time.monotonic", lambda: now)
+    monkeypatch.setattr("aegis.engine.threading.Timer.start", start_timer)
+
+    def payload(kills, phase="live", round_index=3, player="local"):
+        update = _gsi(kills, rnd=round_index)
+        update["map"].update(mode="competitive", phase="live")
+        update["round"] = {"phase": phase}
+        update["provider"] = {"steamid": "local"}
+        update["player"]["steamid"] = player
+        engine.handle_payload(update)
+
+    payload(0)
+    payload(1)
+    now += 70
+    payload(2)
+    assert not timers
+    assert engine.status()["pending_kills"] == 2
+
+    payload(10, phase="over", round_index=4, player="teammate")
+    assert len(timers) == 1
+    now += timers[0].interval
+    timers[0].function()
+    payload(2, phase="over", round_index=4)
+
+    assert [(clip.round_n, clip.kills) for clip in engine.catalog.list()] == [(4, 2)]
+    assert len(engine.recorder.ranges) == 2
+    assert len(timers) == 1
+
+
+def test_merge_round_clips_keeps_originals_and_sums_kills(cfg, data_dir, monkeypatch):
+    engine = Engine(cfg, Catalog())
+    sources = []
+    for i, kills in enumerate((1, 2)):
+        source = data_dir / f"source-{i}.mp4"
+        source.write_bytes(b"source")
+        sources.append(source)
+        engine.catalog.add(Clip(id=str(i), path=str(source), created=i, kills=kills,
+                                match_id="match", round_n=4, map_name="de_dust2"))
+
+    def build(_ffmpeg, clips, output, **_options):
+        assert clips == sources
+        output.write_bytes(b"merged")
+        return output
+
+    monkeypatch.setattr("aegis.engine.media.resolve_ffmpeg", lambda _: "ffmpeg")
+    monkeypatch.setattr("aegis.engine.media.quality_encode_args", lambda *_: [])
+    monkeypatch.setattr("aegis.engine.media.build_montage", build)
+    monkeypatch.setattr("aegis.engine.media.make_thumbnail", lambda *_: None)
+    clip = engine.merge_round_clips(["1", "0"])
+
+    assert (clip.kills, clip.round_n, clip.match_id) == (3, 4, "match")
+    assert Path(clip.path).read_bytes() == b"merged"
+    assert all(source.read_bytes() == b"source" for source in sources)

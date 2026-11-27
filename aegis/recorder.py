@@ -53,7 +53,7 @@ PRESETS: dict[str, tuple] = {
 # Encoder preference order; first one ffmpeg reports as available wins.
 _HW_ENCODERS = ["h264_nvenc", "h264_amf", "h264_qsv"]
 _D3D11_ENCODERS = {"h264_nvenc", "h264_amf"}
-HIGHLIGHT_HISTORY = 120
+HIGHLIGHT_HISTORY = 150
 HIGHLIGHT_LEAD = 2.0
 HIGHLIGHT_TAIL = 1.0
 REPLAY_GRACE_SECONDS = 30

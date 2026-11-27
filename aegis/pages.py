@@ -496,7 +496,7 @@ async function loadStatus() {
     : s.capturing
     ? ['Replay buffer ready', s.gsi_connected
       ? (s.automatic_highlights === false ? 'Automatic highlights are off. You can still save replays.'
-         : 'CS2 is connected. Highlights save automatically when your streak ends.')
+         : 'CS2 is connected. Round highlights save automatically when the round ends.')
       : 'You can save replays now. Automatic highlights will start once CS2 sends game updates.']
     : states[rec.state] || states.idle;
   if ($('#captureTitle').textContent !== status[0]) $('#captureTitle').textContent = status[0];
@@ -650,6 +650,15 @@ function renderClips() {
   }
   g.innerHTML = matches ? matchGroups(clips) : clips.map(clipCard).join('');
   for (const card of $$('#clipGrid .card')) bindCard(card);
+  for (const button of $$('[data-merge-round]')) button.onclick = () => busy(button, 'Merging…', async () => {
+    const clipIds = [...button.closest('.match-round').querySelectorAll('.card:not([data-no-merge])')]
+      .map(card => card.dataset.id);
+    const result = await api('/api/merge-round', jsonPost({clip_ids:clipIds}), 180000);
+    if (result.error) { toast(result.error); return; }
+    await loadClips(true);
+    playVideo(result.clip.id);
+    toast('Merged round clip saved. Original clips kept.');
+  });
 }
 
 function matchGroups(clips) {
@@ -677,7 +686,10 @@ function matchGroups(clips) {
         '</strong><span>' + escape(label) + '</span></summary>' +
         [...rounds.entries()].sort((a,b) => a[0] - b[0]).map(([round, entries]) =>
           '<section class=match-round><h3>' + (round ? 'Round ' + round : 'Round unavailable') +
-          '</h3><div class=grid>' + entries.map(clipCard).join('') + '</div></section>').join('') + '</details>';
+          '</h3>' + (round && entries.filter(c => !c.missing && c.kills > 0 && !c.tags?.some(t =>
+            ['round-merge','manual-replay','trimmed'].includes(t)) && c.title !== 'Manual replay').length >= 2 ?
+            '<button data-merge-round>Merge round clips</button>' : '') +
+          '<div class=grid>' + entries.map(clipCard).join('') + '</div></section>').join('') + '</details>';
     }).join('');
 }
 
@@ -687,7 +699,8 @@ function clipCard(c) {
     const statuses = Object.entries(c.uploads || {}).filter(([name]) => name !== 'gallery');
     const targets = statuses.map(([name, status]) =>
       '<span class="tg ' + (status === 'ok' ? 'ok' : 'err') + '" title="' + escape(status) + '">' + escape(name) + '</span>').join('');
-    return '<article class=card data-id="' + id + '">' +
+    return '<article class=card data-id="' + id + '"' + (c.missing || !c.kills || c.title === 'Manual replay' ||
+      c.tags?.some(t => ['round-merge','manual-replay','trimmed'].includes(t)) ? ' data-no-merge' : '') + '>' +
       '<button class=thumb data-play aria-label="Play ' + title + '"' + (c.missing ? ' disabled' : '') + '>' +
       (c.missing ? '' : '<img src="' + clipMedia(c.id, 'thumb') + '" alt="" loading=lazy>') +
       (kill ? '<span class=badge>' + kill + '</span>' : '') +
@@ -1494,7 +1507,7 @@ details{margin-top:12px;border-top:1px solid var(--line)}summary{cursor:pointer;
       <div class=row><label for=highlight_after>Seconds after each kill</label>
         <input id=highlight_after type=number min=.5 max=10 step=.25 value=1></div>
     </div>
-    <div class=row><label for=debounce>Streak gap in seconds<small>RoundLatch waits this long after a kill before saving the streak.</small></label><input id=debounce type=number min=1 max=30 step=.1 value=7></div>
+    <div class=row><label for=debounce>Streak gap in seconds<small>Applies to modes without round highlights, such as Deathmatch when enabled.</small></label><input id=debounce type=number min=1 max=30 step=.1 value=7></div>
     <div class=row><label for=minkills>Minimum kills</label><input id=minkills type=number min=1 max=10 value=1></div>
     <div class=row><label for=polish_en>Add clip intro and fades<small id=effectsHint></small></label><input type=checkbox id=polish_en checked></div>
   </section>

@@ -36,6 +36,7 @@ from .storage import StorageStatus
 
 KILL_LABELS = {1: "Kill", 2: "Double tap", 3: "TRIPLE", 4: "QUAD", 5: "ACE"}
 COMPETITIVE_MODES = {"competitive", "premier", "wingman", "scrimcomp2v2"}
+ROUND_MODES = COMPETITIVE_MODES | {"casual"}
 
 
 def kill_basename(map_name: str, kills: int) -> str:
@@ -103,6 +104,7 @@ class Engine:
         self._last_player = ""
         self._last_map = ""
         self._last_mode = ""
+        self._closed_round = None
         self._state = {
             "last_match_kills": -1,
             "pending_kills": 0,
@@ -136,12 +138,9 @@ class Engine:
 
         owner = str(provider.get("steamid") or "")
         observed = str(player.get("steamid") or "")
-        if owner and observed and owner != observed:
-            return
+        spectating = bool(owner and observed and owner != observed)
         match_stats = player.get("match_stats") or {}
         current_kills = match_stats.get("kills") if isinstance(match_stats, dict) else None
-        if type(current_kills) is not int or current_kills < 0:
-            return
         map_name = str(map_obj.get("name") or "")
         mode = str(map_obj.get("mode") or "").strip().lower()
         round_value = map_obj.get("round")
@@ -152,7 +151,15 @@ class Engine:
         steam_name = player.get("name") or ""
         steam_id = observed or owner
 
+        round_complete = round_phase == "over" or phase in ("gameover", "intermission")
         with self._lock:
+            if spectating or type(current_kills) is not int or current_kills < 0:
+                if (round_complete and self._last_mode in ROUND_MODES and self._kill_events
+                        and self._kill_events[-1][2] > 0 and self._timer_token is None
+                        and (round_n is None or max(1, round_n) == self._kill_events[-1][2])
+                        and (not map_name or map_name == self._last_map)):
+                    self._arm_timer(max(2, self.cfg.highlight_padding()[1]))
+                return
             if not owner and observed and self._last_player and observed != self._last_player:
                 return
             prev = self._state["last_match_kills"]
@@ -177,6 +184,9 @@ class Engine:
                 elif round_n is not None:
                     ended = round_phase == "over" or self._last_phase in ("gameover", "intermission")
                     display_round = max(1, round_n + (0 if ended else 1))
+            if (self._kill_events and self._match.get("match_mode") in ROUND_MODES and self._kill_events[-1][2]
+                    and (reset or (display_round and self._kill_events[-1][2] != display_round))):
+                self._queue_completed_round()
             self._state.update(last_match_kills=current_kills, map_name=self._last_map or "unknown",
                                round_n=display_round, side=team, steam_name=steam_name,
                                steam_id=steam_id)
@@ -203,6 +213,9 @@ class Engine:
 
             diff = current_kills - prev
             if diff <= 0:
+                if (round_complete and self._kill_events and self._last_mode in ROUND_MODES
+                        and self._kill_events[-1][2] and self._timer_token is None):
+                    self._arm_timer(max(2, self.cfg.highlight_padding()[1]))
                 return
             event = (now, diff, self._state["round_n"])
             history_start = now - self._replay_window()
@@ -219,13 +232,46 @@ class Engine:
                     self._state["pending_kills"] = 0
                     self._kill_events.clear()
                     self._match_generation += 1
+            by_round = self._last_mode in ROUND_MODES and display_round > 0
+            if by_round and self._closed_round == (self._match.get("match_id"), display_round):
+                return
             self._last_kill_at = now
             self._kill_events.append(event)
             self._state["pending_kills"] += diff
-            self._highlight_notice = {"state": "detected", "message": "Kill detected. Waiting for the streak to end."}
+            self._highlight_notice = {"state": "detected", "message": "Kill detected. Waiting for the round to end."
+                                      if by_round else "Kill detected. Waiting for the streak to end."}
             log(f"Kill +{diff} (pending {self._state['pending_kills']}) "
                 f"on {map_name} round {round_n}")
-            self._arm_timer()
+            if not by_round:
+                self._arm_timer()
+            elif round_complete:
+                self._arm_timer(max(2, self.cfg.highlight_padding()[1]))
+
+    def _streak_snapshot(self):
+        events = self._kill_events[:]
+        return (self._match_generation, self._last_kill_at, self._state["pending_kills"], events,
+                self._match.copy(), self._match.get("match_mode", self._last_mode), self._state["map_name"],
+                events[-1][2] if events else self._state["round_n"], self._state["side"],
+                self._state["steam_name"], self._state["steam_id"], self._highlight_notice)
+
+    def _queue_completed_round(self) -> None:
+        snapshot = self._detach_round()
+        delay = max(0.0, snapshot[1] + self.cfg.highlight_padding()[1] - time.monotonic())
+        timer = threading.Timer(delay, lambda: self._save_clip(snapshot=snapshot))
+        timer.daemon = True
+        timer.start()
+
+    def _detach_round(self):
+        snapshot = self._streak_snapshot()
+        self._closed_round = (snapshot[4].get("match_id"), snapshot[7])
+        if self._timer:
+            self._timer.cancel()
+        self._timer_token = None
+        self._match_generation += 1
+        self._kill_events.clear()
+        self._last_kill_at = None
+        self._state["pending_kills"] = 0
+        return snapshot
 
     def _arm_timer(self, delay: float | None = None) -> None:
         if self._timer is not None:
@@ -345,9 +391,15 @@ class Engine:
                     self._last_save_ms = elapsed_ms
 
     # ───────── clip pipeline ─────────
-    def _save_clip(self, token=None) -> None:
+    def _save_clip(self, token=None, *, snapshot=None) -> None:
         with self._save_lock:
-            saved = self._save_current_streak(token)
+            if token is not None and snapshot is None:
+                with self._lock:
+                    if token is not self._timer_token:
+                        return
+                    if self._last_mode in ROUND_MODES and self._kill_events and self._kill_events[-1][2]:
+                        snapshot = self._detach_round()
+            saved = self._save_current_streak(token, snapshot)
         if saved:
             notice, generated, clip, limit = saved
             try:
@@ -370,25 +422,17 @@ class Engine:
             if self._highlight_notice is previous:
                 self._highlight_notice = {"state": state, "message": message}
 
-    def _save_current_streak(self, token) -> tuple | None:
+    def _save_current_streak(self, token, snapshot=None) -> tuple | None:
         # Snapshot the streak but DON'T zero it yet — only deduct once we know
         # the outcome, so a transient recorder failure doesn't silently discard a
         # real streak (and new kills arriving during the save are preserved).
-        with self._lock:
-            if token is not None and token is not self._timer_token:
-                return
-            generation = self._match_generation
-            last_kill = self._last_kill_at
-            kills = self._state["pending_kills"]
-            events = self._kill_events[:]
-            match = self._match.copy()
-            mode = self._last_mode
-            map_name = self._state["map_name"]
-            round_n = events[-1][2] if events else self._state["round_n"]
-            side = self._state["side"]
-            steam_name = self._state["steam_name"]
-            steam_id = self._state["steam_id"]
-            notice = self._highlight_notice
+        detached = snapshot is not None
+        if not detached:
+            with self._lock:
+                if token is not None and token is not self._timer_token:
+                    return
+                snapshot = self._streak_snapshot()
+        generation, last_kill, kills, events, match, mode, map_name, round_n, side, steam_name, steam_id, notice = snapshot
 
         minimum = int(self.cfg.get("engine.min_kills"))
         allowed = self._mode_allows_highlights(mode)
@@ -441,8 +485,13 @@ class Engine:
             self._finish_highlight_notice(notice, "warming_up" if starting else "failed",
                                           "The replay buffer is warming up. RoundLatch will retry."
                                           if starting else "The recorder could not save the highlight. RoundLatch will retry while it is in the buffer.")
+            if detached and time.monotonic() < expires_at:
+                retry = threading.Timer(min(2.0, expires_at - time.monotonic()),
+                                        lambda: self._save_clip(snapshot=snapshot))
+                retry.daemon = True
+                retry.start()
             with self._lock:
-                if generation == self._match_generation and token is self._timer_token:
+                if not detached and generation == self._match_generation and token is self._timer_token:
                     # A fresh kill supersedes this retry and starts a new debounce.
                     self._arm_timer(max(0.0, min(2.0, expires_at - time.monotonic())))
                     log("Recorder produced no clip. Retrying while the streak is in the buffer.")
@@ -697,7 +746,7 @@ class Engine:
             match["kill_markers"] = markers
             clip = self._catalog_clip(captured, sum(m["kills"] for m in markers), map_name,
                                       markers[-1]["round"] if markers else round_n, side,
-                                      title="Manual replay", metadata=match)
+                                      title="Manual replay", tags=["manual-replay"], metadata=match)
         except ClipBudgetFull as exc:
             if generated:
                 captured.unlink(missing_ok=True)
@@ -749,6 +798,36 @@ class Engine:
             log(f"Capture method switched to {method} (it's what works on this PC)")
         clip = self._catalog_test_clip(out, f"Screen capture test ({method})", 0, "screen capture test")
         return {"ok": True, "clip_id": clip.id, "method": method}
+
+    def merge_round_clips(self, ids: list[str]) -> Clip | None:
+        clips = [self.catalog.get(clip_id) for clip_id in ids]
+        if any(not clip or not clip.exists() for clip in clips):
+            raise ValueError("One or more source clips are unavailable.")
+        if any(clip.kills <= 0 or clip.title == "Manual replay"
+               or set(clip.tags).intersection({"round-merge", "manual-replay", "trimmed"}) for clip in clips):
+            raise ValueError("Choose original automatic kill clips.")
+        first = clips[0]
+        if not first.match_id or not first.round_n or any(
+                (clip.match_id, clip.round_n) != (first.match_id, first.round_n) for clip in clips):
+            raise ValueError("Choose clips from the same match and round.")
+        clips.sort(key=lambda clip: (clip.created, clip.id))
+        ffmpeg = media.resolve_ffmpeg(self.cfg.get("ffmpeg_path", ""))
+        if not ffmpeg:
+            raise ValueError("FFmpeg is unavailable.")
+        self._check_clip_budget()
+        output = self.clips_dir() / f"round_{first.round_n}_{uuid.uuid4().hex[:10]}.mp4"
+        try:
+            if not media.build_montage(ffmpeg, [Path(clip.path) for clip in clips], output,
+                                       encode_args=media.quality_encode_args(ffmpeg, self.cfg)):
+                return None
+            kills = sum(clip.kills for clip in clips)
+            return self._catalog_clip(output, kills, first.map_name, first.round_n, first.side,
+                                      title=f"Round {first.round_n} highlights · {kills}K", tags=["round-merge"],
+                                      metadata={"match_id": first.match_id, "match_mode": first.match_mode,
+                                                "match_started": first.match_started})
+        finally:
+            if output.exists() and not any(clip.path == str(output) for clip in self.catalog.list()):
+                output.unlink(missing_ok=True)
 
     def build_montage(self, clip_ids: list[str]) -> Path | None:
         """Stitch selected clips (newest-first order) into one montage file."""
